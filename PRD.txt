@@ -1,0 +1,1274 @@
+# 📋 Digital Restaurant Menu System - Complete PRD (Phase-Based)
+
+---
+
+## 🏗️ **Technology Stack Overview**
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Frontend Framework | React + Vite | Fast development & building |
+| Styling | Tailwind CSS | Responsive & mobile-first |
+| Backend/Database | Supabase | PostgreSQL, Auth, Storage |
+| Authentication | Supabase Auth | Admin login system |
+| Image Storage | Supabase Storage | Menu item images |
+| QR Generation | qrcode npm library | Generate QR codes |
+| Routing | React Router v6 | Navigation |
+| State Management | React Context + Hooks | App state |
+| Hosting | Vercel/Netlify | Deployment |
+| Domain | yourdomain.com | Production URL |
+
+---
+
+## 🗺️ **Development Phases Overview**
+
+| Phase | Duration | Focus |
+|-------|----------|-------|
+| **Phase 1** | Week 1-2 | Foundation & Database Setup |
+| **Phase 2** | Week 3-4 | Admin Panel - Core Features |
+| **Phase 3** | Week 5-6 | Admin Panel - Advanced Features |
+| **Phase 4** | Week 7-8 | User App - Core Features |
+| **Phase 5** | Week 9-10 | User App - Advanced Features |
+| **Phase 6** | Week 11-12 | Testing, Polish & Launch |
+
+---
+
+# 🔷 PHASE 1: FOUNDATION & DATABASE SETUP (Weeks 1-2)
+
+## 🎯 Phase 1 Goals
+- ✅ Project setup with Vite + React
+- ✅ Supabase project creation
+- ✅ Database schema design & implementation
+- ✅ Row Level Security (RLS) policies
+- ✅ Authentication system setup
+- ✅ Multi-tenant architecture
+- ✅ File structure organization
+
+## 📁 **Database Schema**
+
+### 1. `restaurants` Table
+```sql
+CREATE TABLE restaurants (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  name TEXT NOT NULL,
+  subdomain TEXT UNIQUE NOT NULL,
+  owner_email TEXT NOT NULL,
+  logo_url TEXT,
+  phone TEXT,
+  address TEXT,
+  currency TEXT DEFAULT 'PKR',
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### 2. `restaurant_admins` Table
+```sql
+CREATE TABLE restaurant_admins (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  username TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT DEFAULT 'admin',
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### 3. `categories` Table
+```sql
+CREATE TABLE categories (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  icon TEXT,
+  display_order INTEGER DEFAULT 0,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### 4. `menu_items` Table
+```sql
+CREATE TABLE menu_items (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
+  category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  price DECIMAL(10,2) NOT NULL,
+  image_url TEXT,
+  is_available BOOLEAN DEFAULT TRUE,
+  is_offer BOOLEAN DEFAULT FALSE,
+  offer_price DECIMAL(10,2),
+  offer_description TEXT,
+  offer_start_date TIMESTAMP,
+  offer_end_date TIMESTAMP,
+  display_order INTEGER DEFAULT 0,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### 5. `qr_tokens` Table
+```sql
+CREATE TABLE qr_tokens (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
+  table_number TEXT NOT NULL,
+  token TEXT UNIQUE NOT NULL,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT NOW(),
+  expires_at TIMESTAMP DEFAULT NOW() + INTERVAL '15 minutes'
+);
+
+CREATE INDEX idx_qr_tokens_token ON qr_tokens(token);
+CREATE INDEX idx_qr_tokens_restaurant ON qr_tokens(restaurant_id);
+CREATE INDEX idx_qr_tokens_expires ON qr_tokens(expires_at);
+```
+
+### 6. `scan_logs` Table
+```sql
+CREATE TABLE scan_logs (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
+  table_number TEXT NOT NULL,
+  token TEXT NOT NULL,
+  ip_address TEXT,
+  user_agent TEXT,
+  device_type TEXT,
+  scanned_at TIMESTAMP DEFAULT NOW(),
+  expires_at TIMESTAMP DEFAULT NOW() + INTERVAL '15 minutes'
+);
+
+CREATE INDEX idx_scan_logs_restaurant ON scan_logs(restaurant_id);
+CREATE INDEX idx_scan_logs_scanned ON scan_logs(scanned_at);
+```
+
+### 7. `settings` Table
+```sql
+CREATE TABLE settings (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
+  admin_username TEXT DEFAULT 'admin',
+  admin_password_hash TEXT,
+  qr_expiry_minutes INTEGER DEFAULT 15,
+  menu_display_style TEXT DEFAULT 'grid',
+  language TEXT DEFAULT 'en',
+  theme_color TEXT DEFAULT '#4F46E5',
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+## 🔐 **Row Level Security (RLS) Policies**
+
+```sql
+-- Enable RLS on all tables
+ALTER TABLE restaurants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE restaurant_admins ENABLE ROW LEVEL SECURITY;
+ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE menu_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE qr_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE scan_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
+
+-- Policies for restaurants table
+CREATE POLICY "Admins can view their restaurant" ON restaurants
+  FOR SELECT USING (
+    auth.uid() IN (
+      SELECT user_id FROM restaurant_admins 
+      WHERE restaurant_id = restaurants.id
+    )
+  );
+
+CREATE POLICY "Admins can update their restaurant" ON restaurants
+  FOR UPDATE USING (
+    auth.uid() IN (
+      SELECT user_id FROM restaurant_admins 
+      WHERE restaurant_id = restaurants.id
+    )
+  );
+
+-- Policies for categories table
+CREATE POLICY "Anyone can view categories" ON categories
+  FOR SELECT USING (true);
+
+CREATE POLICY "Admins can manage categories" ON categories
+  FOR ALL USING (
+    auth.uid() IN (
+      SELECT user_id FROM restaurant_admins 
+      WHERE restaurant_id = categories.restaurant_id
+    )
+  );
+
+-- Policies for menu_items table
+CREATE POLICY "Anyone can view menu items" ON menu_items
+  FOR SELECT USING (true);
+
+CREATE POLICY "Admins can manage menu items" ON menu_items
+  FOR ALL USING (
+    auth.uid() IN (
+      SELECT user_id FROM restaurant_admins 
+      WHERE restaurant_id = menu_items.restaurant_id
+    )
+  );
+
+-- Policies for qr_tokens table
+CREATE POLICY "Anyone can view qr tokens" ON qr_tokens
+  FOR SELECT USING (true);
+
+CREATE POLICY "Admins can manage qr tokens" ON qr_tokens
+  FOR ALL USING (
+    auth.uid() IN (
+      SELECT user_id FROM restaurant_admins 
+      WHERE restaurant_id = qr_tokens.restaurant_id
+    )
+  );
+
+-- Policies for scan_logs table
+CREATE POLICY "Anyone can view scan logs" ON scan_logs
+  FOR SELECT USING (true);
+
+CREATE POLICY "Admins can manage scan logs" ON scan_logs
+  FOR ALL USING (
+    auth.uid() IN (
+      SELECT user_id FROM restaurant_admins 
+      WHERE restaurant_id = scan_logs.restaurant_id
+    )
+  );
+```
+
+## 📁 **Project Structure**
+
+```
+restaurant-menu-system/
+├── backend/
+│   └── supabase/
+│       ├── migrations/
+│       │   └── schema.sql
+│       └── seed/
+│           └── seed.sql
+├── frontend/
+│   ├── admin/
+│   │   ├── src/
+│   │   │   ├── api/
+│   │   │   │   └── supabase.js
+│   │   │   ├── components/
+│   │   │   │   ├── common/
+│   │   │   │   │   ├── Sidebar.jsx
+│   │   │   │   │   ├── Header.jsx
+│   │   │   │   │   ├── LoadingSpinner.jsx
+│   │   │   │   │   └── ErrorBoundary.jsx
+│   │   │   │   ├── dashboard/
+│   │   │   │   │   ├── StatsCards.jsx
+│   │   │   │   │   └── ActivityFeed.jsx
+│   │   │   │   ├── qr-codes/
+│   │   │   │   │   ├── QRCodeList.jsx
+│   │   │   │   │   ├── QRCodeModal.jsx
+│   │   │   │   │   └── QRCodeActions.jsx
+│   │   │   │   ├── menu/
+│   │   │   │   │   ├── CategoryList.jsx
+│   │   │   │   │   ├── CategoryModal.jsx
+│   │   │   │   │   ├── MenuItemList.jsx
+│   │   │   │   │   ├── MenuItemModal.jsx
+│   │   │   │   │   └── ImageUpload.jsx
+│   │   │   │   ├── offers/
+│   │   │   │   │   ├── OfferList.jsx
+│   │   │   │   │   └── OfferModal.jsx
+│   │   │   │   ├── live/
+│   │   │   │   │   ├── LiveTable.jsx
+│   │   │   │   │   └── SessionTimer.jsx
+│   │   │   │   └── settings/
+│   │   │   │       ├── ProfileSettings.jsx
+│   │   │   │       └── RestaurantSettings.jsx
+│   │   │   ├── pages/
+│   │   │   │   ├── LoginPage.jsx
+│   │   │   │   ├── DashboardPage.jsx
+│   │   │   │   ├── QRCodesPage.jsx
+│   │   │   │   ├── MenuPage.jsx
+│   │   │   │   ├── OffersPage.jsx
+│   │   │   │   ├── LivePage.jsx
+│   │   │   │   └── SettingsPage.jsx
+│   │   │   ├── hooks/
+│   │   │   │   ├── useAuth.js
+│   │   │   │   ├── useQRCode.js
+│   │   │   │   └── useMenu.js
+│   │   │   ├── context/
+│   │   │   │   ├── AuthContext.jsx
+│   │   │   │   └── RestaurantContext.jsx
+│   │   │   ├── utils/
+│   │   │   │   ├── constants.js
+│   │   │   │   └── helpers.js
+│   │   │   ├── styles/
+│   │   │   │   └── index.css
+│   │   │   ├── App.jsx
+│   │   │   └── main.jsx
+│   │   ├── public/
+│   │   │   └── logo.png
+│   │   ├── package.json
+│   │   └── vite.config.js
+│   └── user/
+│       ├── src/
+│       │   ├── api/
+│       │   │   └── supabase.js
+│       │   ├── components/
+│       │   │   ├── common/
+│       │   │   │   ├── Header.jsx
+│       │   │   │   ├── BottomNav.jsx
+│       │   │   │   ├── LoadingSpinner.jsx
+│       │   │   │   └── ErrorPage.jsx
+│       │   │   ├── menu/
+│       │   │   │   ├── MenuGrid.jsx
+│       │   │   │   ├── MenuCard.jsx
+│       │   │   │   ├── CategoryTabs.jsx
+│       │   │   │   └── ItemDetail.jsx
+│       │   │   ├── offers/
+│       │   │   │   ├── OfferList.jsx
+│       │   │   │   └── OfferCard.jsx
+│       │   │   ├── search/
+│       │   │   │   ├── SearchBar.jsx
+│       │   │   │   └── SearchResults.jsx
+│       │   │   ├── filters/
+│       │   │   │   ├── FilterModal.jsx
+│       │   │   │   └── PriceSlider.jsx
+│       │   │   └── scan/
+│       │   │       └── TokenValidation.jsx
+│       │   ├── pages/
+│       │   │   ├── ScanPage.jsx
+│       │   │   ├── MenuPage.jsx
+│       │   │   ├── OffersPage.jsx
+│       │   │   └── SearchPage.jsx
+│       │   ├── hooks/
+│       │   │   ├── useToken.js
+│       │   │   ├── useMenu.js
+│       │   │   └── useFilters.js
+│       │   ├── context/
+│       │   │   ├── MenuContext.jsx
+│       │   │   └── FilterContext.jsx
+│       │   ├── utils/
+│       │   │   ├── constants.js
+│       │   │   └── helpers.js
+│       │   ├── styles/
+│       │   │   └── index.css
+│       │   ├── App.jsx
+│       │   └── main.jsx
+│       ├── public/
+│       │   └── favicon.png
+│       ├── package.json
+│       └── vite.config.js
+├── docs/
+│   ├── PRD-Admin.md
+│   ├── PRD-User.md
+│   └── API-Documentation.md
+├── README.md
+└── .env.example
+```
+
+---
+
+# 🔷 PHASE 2: ADMIN PANEL - CORE FEATURES (Weeks 3-4)
+
+## 🔐 **Authentication System**
+
+### Login Page (`/admin/login`)
+- **Default Credentials**: 
+  - Username: `admin`
+  - Password: `admin`
+- **Features**:
+  - Username/Email field with validation
+  - Password field with show/hide toggle
+  - "Remember Me" checkbox
+  - Login button with loading state
+  - Error messages for invalid credentials
+  - Session timeout after 24 hours
+  - Rate limiting (5 attempts per minute)
+  - HTTPS only with secure cookies
+
+### Settings Page (`/admin/settings`)
+- **Change Credentials**:
+  - Current Password (required with validation)
+  - New Username (unique check)
+  - New Password (strength indicator)
+  - Confirm New Password (match check)
+- **Restaurant Settings**:
+  - Restaurant Name (editable with live preview)
+  - Restaurant Logo (upload with cropping tool)
+  - Contact Phone (format validation)
+  - Contact Email (email validation)
+  - Address (multi-line text)
+  - Default Currency (dropdown: PKR/USD/EUR)
+- **Preferences**:
+  - Default QR expiry time (15/30/45/60 minutes)
+  - Menu display style (Grid/List toggle)
+  - Language (English/Urdu with translation)
+- **Danger Zone**:
+  - Delete all data (with multi-step confirmation)
+  - Export all data (JSON/CSV with date range)
+  - Deactivate account (with warning)
+
+---
+
+## 📊 **Dashboard** (`/admin/dashboard`)
+
+### Statistics Cards (4-column grid)
+| Card | Icon | Description |
+|------|------|-------------|
+| **Total Tables** | 🪑 | Total active QR codes/tables |
+| **Menu Items** | 🍽️ | Total items in menu |
+| **Categories** | 📂 | Number of categories |
+| **Active Offers** | 🎯 | Currently running offers |
+| **Today's Scans** | 👁️ | QR scans today (live counter) |
+| **Active Sessions** | 🔴 | Currently active QR sessions |
+
+### Recent Activity Feed (List)
+- Real-time updates via Supabase subscription
+- "Table 3 scanned at 2:30 PM" with timestamp
+- "New item added: Chicken Biryani" with user name
+- "Offer expired: Pizza Deal" with notification
+- "QR code deleted: Table 5" with reason
+
+### Quick Action Buttons
+- "Add New Menu Item" → Opens modal
+- "Generate New QR" → Opens modal
+- "Create Offer" → Opens modal
+- "View Live Status" → Navigates to live page
+
+### Charts (Recharts library)
+- **Daily Scan Trends**: Last 7 days (bar chart)
+- **Popular Items**: Most viewed items (horizontal bar)
+- **Peak Hours**: Scans by hour (line chart)
+- **Category Popularity**: Pie chart
+
+---
+
+## 📱 **QR Code Management** (`/admin/qr-codes`)
+
+### Header Section
+- Title: "QR Code Management" with icon
+- "Add New QR Code" button (primary CTA)
+- Search bar (search by table number/token)
+- Filter dropdown: All/Active/Inactive/Expired
+- Export button (CSV/PDF)
+
+### QR Code List (Responsive Table)
+| Column | Description | Width |
+|--------|-------------|-------|
+| # | Serial number | 50px |
+| Table Number | User-defined name with icon | 150px |
+| Token | Generated unique code (truncated) | 120px |
+| Created At | Date & time format | 150px |
+| Expires At | Date & time format | 150px |
+| Status | Badge: Active/Inactive/Expired | 100px |
+| Actions | Icons: Download/Print/Delete/Regenerate | 150px |
+
+### Add QR Code Modal
+- **Fields**:
+  - Table Number (required): Text input with placeholder "e.g., Table 1, Table A, VIP Table"
+  - Auto-generate token checkbox (default checked)
+  - Manual token input (if unchecked)
+- **QR Code Preview**:
+  - Live QR code generation
+  - High-resolution preview
+  - Download options: PNG (300 DPI), PDF, SVG
+  - Print directly from modal
+- **Actions**:
+  - Save button (adds to database)
+  - Cancel button (closes modal)
+  - Generate New Token button (regenerates preview)
+
+### QR Code Actions (Dropdown)
+1. **Download**:
+   - PNG (High resolution 300 DPI)
+   - PDF (Printable with table number)
+   - SVG (Vector for scaling)
+   - Print (Opens print dialog)
+
+2. **Delete**:
+   - Confirmation dialog: "Delete QR for Table 3?"
+   - Reason input (optional)
+   - Deletes from database immediately
+   - QR stops working instantly
+   - Removes from list with animation
+
+3. **Regenerate**:
+   - Creates new token for same table
+   - Old token becomes invalid immediately
+   - New QR code generated
+   - Customer must use new QR
+   - Activity log updated
+
+4. **Toggle Status**:
+   - Active/Inactive toggle switch
+   - Inactive = QR stops working
+   - Visual indicator on card/list
+
+---
+
+# 🔷 PHASE 3: ADMIN PANEL - ADVANCED FEATURES (Weeks 5-6)
+
+## 📋 **Menu Management** (`/admin/menu`)
+
+### Categories Section (Top section)
+
+#### Category List (Horizontal scroll)
+- Display all categories with icons/emojis
+- Drag to reorder (drag-and-drop)
+- Each category shows: Icon, Name, Item count
+- Edit category (modal with icon picker)
+- Delete category (soft delete with confirmation)
+- "Add New Category" button (floating)
+
+#### Add Category Modal
+- **Fields**:
+  - Category Name (required): Text input
+  - Icon/Emoji (optional): Emoji picker with search
+  - Display Order: Auto or manual input
+  - Is Active: Toggle switch
+- **Actions**:
+  - Save button
+  - Cancel button
+
+### Menu Items Section (Main section)
+
+#### Item List (Card View - Responsive Grid)
+Each card shows:
+- **Image**: Lazy-loaded thumbnail (top)
+- **Name**: Bold text
+- **Category**: Small tag
+- **Price**: Primary color
+- **Availability**: Badge (Available/Sold Out)
+- **Actions**: Edit/Delete/Toggle
+
+#### Add Item Modal
+**Fields**:
+- **Item Name** (required): Text input with live preview
+- **Category** (dropdown): Select from existing categories
+- **Description** (optional): Rich text editor (basic)
+- **Price** (required): Number input with currency symbol
+- **Image** (optional): File upload from device
+  - Drag and drop support
+  - Uploads to Supabase Storage
+  - Auto-generates thumbnail
+  - Preview with crop tool
+  - Supported: JPG, PNG, WebP, GIF
+  - Max size: 5MB
+  - Auto-compression
+- **Is Available**: Toggle switch
+- **Add to Offers**: Option to immediately create offer
+
+#### Edit Item Modal
+- All fields pre-filled
+- Same layout as Add Item
+- Image can be replaced (remove old, upload new)
+- "Update" button with loading state
+- "Cancel" button
+
+#### Bulk Actions (Checkbox selection)
+- Select all / Deselect all
+- Bulk delete (with confirmation)
+- Bulk availability toggle
+- Bulk category change
+- Export selected items (CSV)
+
+---
+
+## 🎯 **Offers Management** (`/admin/offers`)
+
+### Offers Header
+- Title: "Special Offers" with sparkle icon
+- "Create New Offer" button (primary CTA)
+- Filter tabs: All/Active/Upcoming/Expired
+- Search bar (search by item name)
+- Stats: Active offers count, Total offers
+
+### Offer List (Card View - Full width)
+Each offer card shows:
+- **Image**: Large image (top)
+- **Item Name**: Bold heading
+- **Original Price**: Strikethrough (gray)
+- **Offer Price**: Large, primary color with discount percentage
+- **Offer Description**: Short description
+- **Status**: Badge (Active/Upcoming/Expired)
+- **Valid Dates**: Date range display
+- **Time Remaining**: Countdown timer (if active)
+- **Actions**: Edit/Delete
+
+### Create Offer Modal
+**Fields**:
+- **Select Item** (required): Searchable dropdown of all menu items
+- **Offer Price** (required): Number input with currency
+- **Discount Percentage**: Auto-calculated from original price
+- **Offer Description** (required): Text input (short)
+- **Start Date** (required): Date picker (calendar)
+- **Start Time** (required): Time picker
+- **End Date** (required): Date picker (calendar)
+- **End Time** (required): Time picker
+- **Auto-activate**: Toggle (activate on save)
+- **Notify Customers**: Toggle (send notification - coming soon)
+
+### Offer Statuses
+- **Active**: Current time within date range (green badge)
+- **Upcoming**: Start date in future (yellow badge)
+- **Expired**: End date passed (red badge)
+- **Draft**: Saved but not active (gray badge)
+
+### Offer Actions
+- Edit (opens modal with pre-filled data)
+- Delete (with confirmation)
+- Duplicate (create copy)
+- Toggle Active/Inactive
+
+---
+
+## 📡 **Live Status Page** (`/admin/live`)
+
+### Real-time Monitoring
+- Auto-refreshes every 5 seconds
+- Supabase real-time subscription
+- Sound alert on new scan (toggle on/off)
+- Browser notification on new scan
+- Highlight newly scanned row (yellow flash)
+
+### Active Sessions Table
+| Column | Description | Width |
+|--------|-------------|-------|
+| # | Serial number | 50px |
+| Table Number | Table name with icon | 150px |
+| Token | QR token (truncated) | 120px |
+| Scanned At | Time of scan | 150px |
+| IP Address | Customer's IP (masked) | 130px |
+| Device Info | Browser/OS icon | 150px |
+| Time Remaining | Countdown timer (live) | 120px |
+| Status | Badge: Active/Expired | 100px |
+
+### Historical Data Section
+- Show last 24 hours scans (paginated)
+- Search by table/token
+- Filter by date range
+- Export logs (CSV)
+- Clear logs (with confirmation)
+
+### Notifications Panel
+- Sound alert toggle
+- Browser notification toggle
+- Toast notifications for new scans
+- Notification sound selection
+
+---
+
+# 🔷 PHASE 4: USER APP - CORE FEATURES (Weeks 7-8)
+
+## 📱 **Scan Page** (`/scan/:token`)
+
+### Token Validation (Entry point)
+1. Extract token from URL
+2. Query Supabase for token validity
+3. Check if token exists
+4. Check if token is active (`is_active = true`)
+5. Check if token is expired (`expires_at > NOW()`)
+6. Log the scan to `scan_logs`
+7. Redirect to error page or menu
+
+### Error Pages Design
+
+#### Invalid QR (Token doesn't exist)
+```
+┌─────────────────────────┐
+│         😕              │
+│   Oops! Something's wrong│
+│                         │
+│  This QR code is not    │
+│  recognized in our      │
+│  system.                │
+│                         │
+│  Please scan the QR     │
+│  code on your table     │
+│  again.                 │
+│                         │
+│  [ 🔄 Scan Again ]      │
+└─────────────────────────┘
+```
+
+#### Expired QR (Session expired)
+```
+┌─────────────────────────┐
+│         ⏰              │
+│   Session Expired!      │
+│                         │
+│  Your session has       │
+│  expired after 15       │
+│  minutes.               │
+│                         │
+│  Please scan the QR     │
+│  code on your table     │
+│  again.                 │
+│                         │
+│  [ 🔄 Scan Again ]      │
+└─────────────────────────┘
+```
+
+#### Deleted QR (Admin removed)
+```
+┌─────────────────────────┐
+│         🚫              │
+│   QR Not Available      │
+│                         │
+│  This QR code has been  │
+│  deactivated by the     │
+│  restaurant staff.      │
+│                         │
+│  Please contact your    │
+│  waiter for assistance. │
+│                         │
+│  [ 📞 Call Waiter ]     │
+└─────────────────────────┘
+```
+
+---
+
+## 🏠 **Menu Page** (`/scan/:token` after validation)
+
+### Header Section (Fixed top)
+```
+┌─────────────────────────┐
+│  🍕 Pizza Palace        │
+│  Table 3 ● Active 14:32 │ ← Timer
+├─────────────────────────┤
+│  All | Apps | Main | Bev│ ← Categories (scrollable)
+├─────────────────────────┤
+│                         │
+│  [Menu Grid Below]      │
+│                         │
+└─────────────────────────┘
+```
+
+**Components**:
+- Restaurant Logo (top left)
+- Restaurant Name (top center)
+- Table Number with live indicator (top right)
+- Session countdown timer (14:32 remaining)
+- Category tabs (horizontal scroll)
+- Menu items grid (below)
+
+---
+
+### Navigation Bar (Fixed bottom)
+```
+┌─────────────────────────┐
+│                         │
+│  [Main Content]         │
+│                         │
+├─────────────────────────┤
+│ 🏠  🎯  🔍  📋        │
+│ Menu Offers Search Cats │ ← Bottom Nav
+└─────────────────────────┘
+```
+
+**Icons & Labels**:
+| Icon | Label | Route | Description |
+|------|-------|-------|-------------|
+| 🏠 | Menu | `/menu` | Home page with all items |
+| 🎯 | Offers | `/offers` | Show active offers |
+| 🔍 | Search | `/search` | Search bar overlay |
+| 📋 | Cats | `/filters` | Opens category filter |
+
+---
+
+## 📋 **Category Tabs (Horizontal Scroll)**
+```
+┌─────────────────────────────────────────┐
+│  [All] [Appetizers] [Main Course]       │
+│  [Beverages] [Desserts] [Specials]      │
+│  [...more]                              │
+└─────────────────────────────────────────┘
+```
+
+**Features**:
+- Smooth horizontal scroll
+- Underline on active tab
+- Touch-friendly (44px height)
+- Indicator for more tabs (scroll hint)
+- Category count badge (optional)
+
+---
+
+## 🍽️ **Menu Items Grid (2-column responsive)**
+
+### Item Card Design
+```
+┌────────────┬────────────┐
+│  ┌──────┐  │  ┌──────┐  │
+│  │Image │  │  │Image │  │
+│  └──────┘  │  └──────┘  │
+│  Item Name │  Item Name │
+│  Desc...   │  Desc...   │
+│  $12.99    │  $8.99     │
+│  [OFFER]   │            │
+└────────────┴────────────┘
+```
+
+**Card Details**:
+- **Image**: Rounded top corners (200x200px)
+- **Name**: Bold, 16px, 2-line max
+- **Description**: 14px, gray, 2-line max
+- **Price**: Bold, primary color, 18px
+- **Offer Badge**: Red "OFFER" tag (if on sale)
+- **Original Price**: Strikethrough (if on offer)
+- **Availability**: "Sold Out" overlay (if unavailable)
+- **Category Tag**: Small tag below description
+
+### Animation
+- Card entrance: Fade-in + slide-up
+- Skeleton loading on initial load
+- Smooth scroll
+- Image lazy loading
+
+---
+
+# 🔷 PHASE 5: USER APP - ADVANCED FEATURES (Weeks 9-10)
+
+## 🔍 **Search Functionality**
+
+### Search Bar (Overlay)
+```
+┌─────────────────────────┐
+│  🔍 Search Menu...      │ ← Full-width overlay
+│  ✕ Cancel               │
+├─────────────────────────┤
+│  [Recent Searches]      │
+│  • Pizza                │
+│  • Burger               │
+│  • Cold Coffee          │
+├─────────────────────────┤
+│  [Search Results]       │
+│  🍕 Pepperoni Pizza     │
+│  🍔 Cheeseburger        │
+│  🍟 French Fries        │
+│  ☕ Cold Coffee          │
+└─────────────────────────┘
+```
+
+**Features**:
+- Appears when search icon is tapped
+- Full-width overlay with blur background
+- Auto-focus on open
+- Real-time results (debounced)
+- Search by name (primary)
+- Search by description (secondary)
+- Highlight matching text
+- Show category of each result
+- Recent searches history
+- Clear history option
+
+### Empty Search State
+```
+┌─────────────────────────┐
+│         🔍              │
+│   No results found      │
+│                         │
+│  Try searching for:     │
+│  • Pizza                │
+│  • Pasta                │
+│  • Burger               │
+└─────────────────────────┘
+```
+
+---
+
+## 🎯 **Offers Page** (`/offers`)
+
+### Header Section
+```
+┌─────────────────────────┐
+│  🎯 Special Offers      │
+│  3 Active Offers        │ ← Count badge
+├─────────────────────────┤
+│  [Offer Cards Below]    │
+│                         │
+└─────────────────────────┘
+```
+
+### Offer Card (Full-width)
+```
+┌─────────────────────────┐
+│  ┌──────────────────┐   │
+│  │   [Large Image]   │   │
+│  └──────────────────┘   │
+│  🍕 Pepperoni Pizza     │ ← Item Name
+│  $12.99   $9.99         │ ← Original & Offer Price
+│  23% OFF!               │ ← Discount badge
+│  "Special Monday Deal"  │ ← Offer Description
+│  📅 Valid until Dec 31  │ ← Validity date
+│  🏷️ Main Course        │ ← Category tag
+└─────────────────────────┘
+```
+
+**Features**:
+- Large hero image at top
+- Item name in bold
+- Original price strikethrough
+- Offer price in primary color
+- Discount percentage badge
+- Offer description
+- Valid until date
+- Category tag
+
+### Empty Offer State
+```
+┌─────────────────────────┐
+│         🎯              │
+│   No Active Offers      │
+│                         │
+│  Check back later for   │
+│  special deals and      │
+│  discounts!             │
+│                         │
+│  [ 🏠 Go to Menu ]      │
+└─────────────────────────┘
+```
+
+---
+
+## 📋 **Categories & Filters**
+
+### Category Filter (Sidebar/Overlay)
+```
+┌─────────────────────────┐
+│  📋 Categories          │
+│  ✕ Close                │
+├─────────────────────────┤
+│  ☑️ All Items           │
+│  ☑️ Appetizers          │
+│  ☑️ Main Course         │
+│  ☐ Beverages            │
+│  ☐ Desserts             │
+│  ☐ Specials             │
+├─────────────────────────┤
+│  [ Apply ] [ Reset ]    │
+└─────────────────────────┘
+```
+
+### Filter Options (Modal)
+```
+┌─────────────────────────┐
+│  ⚙️ Filters             │
+│  ✕ Close                │
+├─────────────────────────┤
+│  Price Range            │
+│  💰 PKR 100 - 2000      │
+│  [==========o=====]     │ ← Slider
+│                         │
+│  Sort By                │
+│  ○ Popular              │
+│  ● Price: Low to High   │
+│  ○ Price: High to Low   │
+│  ○ Name: A to Z         │
+│                         │
+│  Availability           │
+│  ☑️ Show available only │
+│                         │
+│  [ Apply ] [ Reset ]    │
+└─────────────────────────┘
+```
+
+**Filter Options**:
+- **Price Range**: Dual slider (min-max)
+- **Sort By**: Radio buttons
+- **Availability**: Toggle switch
+- **Apply Filters** button
+- **Reset Filters** button
+
+---
+
+## ⏰ **QR Session Management**
+
+### Session Timer (Header)
+```
+┌─────────────────────────┐
+│  🕐 Your session expires│
+│  in: 14:32              │ ← Countdown
+│  ━━━━━━━━━━━━○━━━━━━━  │ ← Progress bar
+└─────────────────────────┘
+```
+
+**Features**:
+- Countdown timer (MM:SS format)
+- Progress bar (visual indicator)
+- Warning at 2 minutes (red color)
+- Auto-refresh check every second
+- On expiry: Redirect to expired page
+
+### Expired Session Alert
+```
+┌─────────────────────────┐
+│         ⚠️              │
+│   Session Expired!      │
+│                         │
+│  Your 15-minute session │
+│  has ended.             │
+│                         │
+│  Please scan the QR     │
+│  code again to continue.│
+│                         │
+│  [ 🔄 Scan Again ]      │
+└─────────────────────────┘
+```
+
+---
+
+# 🔷 PHASE 6: TESTING, POLISH & LAUNCH (Weeks 11-12)
+
+## 🧪 **Testing Scenarios**
+
+### Functionality Testing
+1. **QR Code Management**:
+   - ✅ Generate QR with valid token
+   - ✅ Delete QR → immediate invalidation
+   - ✅ Regenerate QR → old invalid, new works
+   - ✅ Download QR as PNG/PDF
+   - ✅ Print QR directly
+
+2. **Menu Management**:
+   - ✅ Add item with image upload
+   - ✅ Edit item details
+   - ✅ Delete item (with confirmation)
+   - ✅ Toggle availability
+   - ✅ Category assignment
+   - ✅ Offer creation from item
+
+3. **User Experience**:
+   - ✅ Scan QR → menu loads correctly
+   - ✅ Category filtering works
+   - ✅ Search finds items
+   - ✅ Offers page shows active offers
+   - ✅ Session expires after 15 minutes
+   - ✅ Error pages display correctly
+
+### Security Testing
+1. **URL Manipulation**:
+   - ✅ `/scan/` → shows error
+   - ✅ `/scan/invalid` → shows invalid QR
+   - ✅ `/scan/expired` → shows expired
+   - ✅ Modifying table number → blocked
+   - ✅ Modifying token → blocked
+
+2. **Authentication**:
+   - ✅ Default credentials work
+   - ✅ Invalid credentials blocked
+   - ✅ Session timeout works
+   - ✅ Rate limiting works
+   - ✅ Password hashing
+
+3. **Data Isolation**:
+   - ✅ Restaurant A cannot see Restaurant B
+   - ✅ RLS policies enforced
+   - ✅ Data integrity maintained
+
+### Performance Testing
+| Metric | Target | Test Method |
+|--------|--------|-------------|
+| Page Load Time | < 2 seconds | Lighthouse |
+| First Paint | < 1 second | Lighthouse |
+| Time to Interactive | < 3 seconds | Lighthouse |
+| Mobile Performance | > 90 score | Lighthouse |
+| Bundle Size | < 200KB | Build analysis |
+
+### Browser Compatibility
+| Browser | Version | Status |
+|---------|---------|--------|
+| Chrome | 90+ | ✅ |
+| Firefox | 88+ | ✅ |
+| Safari | 14+ | ✅ |
+| Edge | 90+ | ✅ |
+| Samsung Internet | 14+ | ✅ |
+| Opera | 76+ | ✅ |
+
+### Device Testing
+| Device | Screen Size | Status |
+|--------|-------------|--------|
+| iPhone SE | 375x667 | ✅ |
+| iPhone 12/13 | 390x844 | ✅ |
+| iPhone 14 Pro | 393x852 | ✅ |
+| Samsung S21 | 360x800 | ✅ |
+| Google Pixel 6 | 412x915 | ✅ |
+| iPad Mini | 768x1024 | ✅ |
+| Desktop | 1920x1080 | ✅ |
+
+---
+
+## 🚀 **Deployment Checklist**
+
+### Supabase Setup
+- [ ] Project created in Supabase
+- [ ] Database schema applied
+- [ ] RLS policies enabled
+- [ ] Storage bucket created (menu-images)
+- [ ] Storage policies configured
+- [ ] Authentication providers set
+- [ ] API keys configured
+
+### Frontend Deployment
+- [ ] Environment variables configured
+  - `VITE_SUPABASE_URL`
+  - `VITE_SUPABASE_ANON_KEY`
+  - `VITE_APP_NAME`
+  - `VITE_APP_URL`
+- [ ] Build optimization (minification, tree shaking)
+- [ ] Asset optimization (images, fonts)
+- [ ] CDN configuration
+- [ ] SSL certificate (HTTPS)
+- [ ] Custom domain configured
+- [ ] DNS records updated
+
+### Database Maintenance
+- [ ] Cleanup cron job (delete expired tokens)
+- [ ] Backup schedule configured
+- [ ] Monitoring alerts set
+- [ ] Indexes created for performance
+
+### Launch Preparations
+- [ ] Documentation completed
+- [ ] Support contact available
+- [ ] Error tracking (Sentry)
+- [ ] Analytics (optional)
+- [ ] Landing page ready
+- [ ] Social media presence
+
+---
+
+## 📊 **Monitoring & Maintenance**
+
+### Supabase Monitoring
+| Metric | Target | Alert Threshold |
+|--------|--------|-----------------|
+| Database Size | < 500MB | > 450MB |
+| API Requests | < 10k/day | > 8k/day |
+| Storage Used | < 1GB | > 900MB |
+| Auth Users | < 1000 | > 800 |
+| Error Rate | < 1% | > 5% |
+
+### Application Monitoring
+| Metric | Target | Alert Threshold |
+|--------|--------|-----------------|
+| Uptime | 99.9% | < 99.5% |
+| Response Time | < 2s | > 3s |
+| Error Rate | < 0.1% | > 1% |
+| Active Users | Growing | - |
+
+### Daily Maintenance Tasks
+1. Check error logs
+2. Monitor database size
+3. Check storage usage
+4. Review user feedback
+5. Update offers (expired/active)
+
+### Weekly Maintenance Tasks
+1. Database backup
+2. Performance review
+3. Security audit
+4. User feedback review
+5. Feature planning
+
+---
+
+## 📈 **Success Metrics**
+
+| Metric | Target | Measurement |
+|--------|--------|-------------|
+| **Business Metrics** | | |
+| Monthly Revenue | $1,000 (100 restaurants) | Stripe/Paddle |
+| Customer Acquisition | 10 restaurants/month | Admin panel |
+| Customer Retention | > 90% | Subscription data |
+| Average Revenue | $10/restaurant | Payment data |
+| **Technical Metrics** | | |
+| Uptime | 99.9% | Monitoring |
+| Load Time | < 2 seconds | Lighthouse |
+| QR Generation | < 1 second | Admin panel |
+| Menu Load | < 1.5 seconds | User app |
+| **User Metrics** | | |
+| Scans/Day | 100+ | Scan logs |
+| Items Viewed/Scan | 5+ | Analytics |
+| Time on App | 5+ minutes | Analytics |
+| Offer Views | 20% of scans | Analytics |
+
+---
+
+## 🎯 **Future Enhancements (V2)**
+
+### Phase 7: Ordering System
+- [ ] Add to cart functionality
+- [ ] Order placement
+- [ ] Kitchen display system
+- [ ] Order status tracking
+- [ ] Order history
+
+### Phase 8: Payment Integration
+- [ ] Stripe/Paddle integration
+- [ ] Online payments
+- [ ] Split bill feature
+- [ ] Tipping option
+
+### Phase 9: Waiter Features
+- [ ] Waiter call button
+- [ ] Table management
+- [ ] Order assignment
+- [ ] Bill generation
+
+### Phase 10: Advanced Features
+- [ ] Multiple languages (Urdu, Arabic)
+- [ ] Dark mode
+- [ ] Voice search
+- [ ] AR menu preview
+- [ ] Loyalty program
+- [ ] Push notifications
+- [ ] Customer reviews
+- [ ] Analytics dashboard
+- [ ] Marketing tools
+
+---
+
+## 🎉 **Phase Summary**
+
+| Phase | Duration | Focus | Status |
+|-------|----------|-------|--------|
+| Phase 1 | Weeks 1-2 | Foundation & Database | ✅ Ready |
+| Phase 2 | Weeks 3-4 | Admin Panel Core | ✅ Ready |
+| Phase 3 | Weeks 5-6 | Admin Panel Advanced | ✅ Ready |
+| Phase 4 | Weeks 7-8 | User App Core | ✅ Ready |
+| Phase 5 | Weeks 9-10 | User App Advanced | ✅ Ready |
+| Phase 6 | Weeks 11-12 | Testing, Polish & Launch | ✅ Ready |
+
+---
+
+## 📝 **Final Notes**
+
+**This PRD is now complete and ready for your AI Vibe Coder!**
+
+### Instructions for AI Vibe Coder:
+```
+Create the Digital Restaurant Menu System based on this PRD.
+Follow these phases in order:
+1. Phase 1: Setup database and foundation
+2. Phase 2: Build admin panel core features
+3. Phase 3: Build admin panel advanced features
+4. Phase 4: Build user app core features
+5. Phase 5: Build user app advanced features
+6. Phase 6: Testing and deployment
+
+Use:
+- React + Vite for frontend
+- Tailwind CSS for styling
+- Supabase for database, auth, and storage
+- React Router for navigation
+- qrcode for QR generation
+- Responsive mobile-first design
+
+Make it production-ready, secure, and scalable.
+```
+
+---
+
+**Your Digital Restaurant Menu System is now fully planned and ready to build!** 🚀
