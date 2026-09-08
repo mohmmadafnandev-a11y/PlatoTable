@@ -1,4 +1,4 @@
--- Saffron Table: initial multi-tenant restaurant menu schema
+-- PalatoTabale: initial multi-tenant restaurant menu schema
 create extension if not exists pgcrypto;
 
 create table public.restaurants (

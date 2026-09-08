@@ -1,4 +1,4 @@
-# PlatoTable
+# PalatoTabale
 
 A premium digital restaurant menu and management platform built with React, Vite, and Supabase.
 
