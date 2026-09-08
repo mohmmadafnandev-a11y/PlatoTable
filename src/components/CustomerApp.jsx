@@ -1,72 +1,61 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { categories, fallbackMenuItems } from '../data'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
-export default function CustomerApp() {
+const pages = { menu: ['Menu', '⌂'], offers: ['Offers', '✦'], search: ['Search', '⌕'], categories: ['Categories', '☷'] }
+
+export default function CustomerApp({ session }) {
   const { token } = useParams()
-  const [menuItems, setMenuItems] = useState(fallbackMenuItems)
-  const [activeCategory, setActiveCategory] = useState('all')
-  const [activeTab, setActiveTab] = useState('menu')
+  const navigate = useNavigate()
+  const location = useLocation()
+  const page = location.pathname.split('/').at(-1)
+  const activePage = pages[page] ? page : 'menu'
+  const [menu, setMenu] = useState([])
+  const [categories, setCategories] = useState([])
   const [query, setQuery] = useState('')
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [selectedItem, setSelectedItem] = useState(null)
-  const [notice, setNotice] = useState('')
-  const [dataSource, setDataSource] = useState('demo')
+  const [category, setCategory] = useState('all')
+  const [loading, setLoading] = useState(true)
+  const [selected, setSelected] = useState(null)
+  const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
-    if (!supabase) return
-    const loadMenu = async () => {
-      const { data, error } = await supabase.from('menu_items').select('*, categories(name)').eq('is_available', true).order('display_order')
-      if (!error && data?.length) {
-        setMenuItems(data.map((item) => ({ ...item, image: item.image_url, category: item.categories?.name?.toLowerCase().replaceAll(' ', '-') || 'mains', time: '15–25 min' })))
-        setDataSource('live')
-      }
-    }
-    loadMenu()
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
   }, [])
 
-  const visibleItems = useMemo(() => menuItems.filter((item) => {
-    const categoryMatch = activeCategory === 'all' || item.category === activeCategory
-    const searchText = `${item.name} ${item.description || ''}`.toLowerCase()
-    return categoryMatch && searchText.includes(query.toLowerCase())
-  }), [activeCategory, menuItems, query])
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      const { data, error } = await supabase.rpc('get_scan_menu', { scan_token: token })
+      if (!alive) return
+      if (error || !data?.valid) { navigate('/scan', { replace: true }); return }
+      setCategories(data.categories || [])
+      setMenu(data.items || [])
+      setLoading(false)
+    }
+    load()
+    return () => { alive = false }
+  }, [navigate, token])
 
-  const showNotice = (message) => {
-    setNotice(message)
-    window.setTimeout(() => setNotice(''), 2500)
-  }
+  const remainingSeconds = Math.max(0, Math.floor((new Date(session.session_expires_at).getTime() - now) / 1000))
+  const minutes = String(Math.floor(remainingSeconds / 60)).padStart(2, '0')
+  const seconds = String(remainingSeconds % 60).padStart(2, '0')
+  const visible = useMemo(() => menu.filter((item) => {
+    const categoryMatches = category === 'all' || item.category_id === category
+    return categoryMatches && `${item.name} ${item.description || ''}`.toLowerCase().includes(query.toLowerCase())
+  }), [category, menu, query])
+  const items = activePage === 'offers' ? visible.filter((item) => item.is_offer && (!item.offer_start_date || new Date(item.offer_start_date) <= new Date()) && (!item.offer_end_date || new Date(item.offer_end_date) > new Date())) : visible
+  const go = (target) => navigate(`/scan/${token}/${target === 'menu' ? '' : target}`)
 
-  const displayItems = activeTab === 'offers' ? menuItems.filter((item) => item.is_offer) : visibleItems
-  const tableName = token ? `Table ${token.slice(-2).toUpperCase()}` : 'Table 04'
-
-  return <main className="app-shell">
-    <section className="menu-app" aria-label="Saffron Table digital menu">
-      <header className="topbar">
-        <div className="brand-mark" aria-hidden="true">S</div>
-        <div className="brand-copy"><span className="eyebrow">WELCOME TO</span><strong>Saffron Table</strong></div>
-        <button className="table-status" type="button" onClick={() => showNotice(`Your ${dataSource} menu session is active`)}><span className="live-dot" /><span>{tableName}</span><small>14:32</small></button>
-      </header>
-
-      <div className="hero-panel">
-        <div className="hero-content"><span className="hero-kicker">THE SAFFRON EXPERIENCE</span><h1>Good food,<br /><em>great moments.</em></h1><p>A modern take on the flavours you already love.</p><button className="hero-button" type="button" onClick={() => document.getElementById('menu-list')?.scrollIntoView({ behavior: 'smooth' })}>Explore the menu <span>→</span></button></div>
-        <div className="hero-image" role="img" aria-label="A plated restaurant dish" /><div className="hero-note"><span>✦</span> Made fresh,<br />just for you</div>
-      </div>
-
-      <section className="content-area">
-        <div className="section-heading"><div><span className="eyebrow">OUR SELECTION</span><h2>{activeTab === 'offers' ? 'Today’s special offers' : activeTab === 'about' ? 'Our story' : 'Find your new favourite'}</h2></div><button className="search-button" type="button" onClick={() => setSearchOpen(true)} aria-label="Search menu">⌕</button></div>
-        {activeTab === 'about' ? <article className="about-card"><span className="eyebrow">SINCE 2016</span><h2>Rooted in tradition. Made for today.</h2><p>At Saffron Table, every dish begins with carefully sourced ingredients and the recipes that bring people together. Take your time, savour every bite, and make yourself at home.</p><div><span>✦ Open daily</span><span>☏ Need help? Call staff</span><Link to="/admin/login">Staff access →</Link></div></article> : <>
-          {activeTab === 'menu' && <div className="category-row" role="tablist" aria-label="Menu categories">{categories.map((category) => <button key={category.id} type="button" className={activeCategory === category.id ? 'category active' : 'category'} onClick={() => setActiveCategory(category.id)}><span>{category.icon}</span>{category.label}</button>)}</div>}
-          {activeTab === 'offers' && <div className="offer-banner"><div><span className="offer-label">LIMITED TIME</span><strong>Up to 20% off<br />your table favourites</strong></div><button type="button" onClick={() => showNotice('Offers are automatically applied')}>View offers</button></div>}
-          <div className="menu-grid" id="menu-list">{displayItems.map((item, index) => <article className="dish-card" key={item.id} style={{ animationDelay: `${index * 55}ms` }}><button className="image-button" type="button" onClick={() => setSelectedItem(item)} aria-label={`View ${item.name}`}><img src={item.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=900&q=80'} alt="" />{item.tag && <span className="dish-tag">{item.tag}</span>}{item.is_offer && <span className="discount-badge">OFFER</span>}</button><div className="dish-info"><div className="dish-line"><h3>{item.name}</h3><button type="button" className="plus-button" onClick={() => showNotice(`${item.name} added to your table order`)} aria-label={`Add ${item.name}`}>+</button></div><p>{item.description}</p><div className="price-line"><strong>PKR {(item.is_offer ? item.offer_price : item.price).toLocaleString()}</strong><span>◷ {item.time}</span></div></div></article>)}</div>
-          {!displayItems.length && <div className="empty-state">No dishes found. Try another search.</div>}
-        </>}
-      </section>
-      <nav className="bottom-nav" aria-label="Main navigation">{[['menu', '⌂', 'Menu'], ['offers', '✦', 'Offers'], ['search', '⌕', 'Search'], ['about', '◌', 'About']].map(([tab, icon, label]) => <button key={tab} type="button" className={activeTab === tab ? 'nav-item active' : 'nav-item'} onClick={() => tab === 'search' ? setSearchOpen(true) : setActiveTab(tab)}><span>{icon}</span>{label}</button>)}</nav>
+  return <main className="app-shell"><section className="menu-app">
+    <header className="topbar"><div className="brand-mark">{session.restaurant_name?.slice(0, 1) || 'P'}</div><div className="brand-copy"><span className="eyebrow">WELCOME TO</span><strong>{session.restaurant_name}</strong></div><div className="table-status"><span className="live-dot" /><span>{session.table_number}</span><small>{minutes}:{seconds}</small></div></header>
+    <section className="content-area">
+      {activePage === 'search' ? <><div className="section-heading"><div><span className="eyebrow">FIND A DISH</span><h2>Search menu</h2></div></div><label className="search-field page-search"><span>⌕</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search dishes or ingredients" /></label></> : <><div className="section-heading"><div><span className="eyebrow">{activePage === 'offers' ? 'AVAILABLE NOW' : 'OUR MENU'}</span><h2>{activePage === 'offers' ? 'Special offers' : 'Made for your table'}</h2></div>{activePage === 'menu' && <button className="search-button" onClick={() => go('search')} aria-label="Open search">⌕</button>}</div>
+      {activePage === 'menu' && <div className="category-row">{[{ id: 'all', name: 'All', icon: '✦' }, ...categories].map((item) => <button key={item.id} className={category === item.id ? 'category active' : 'category'} onClick={() => setCategory(item.id)}><span>{item.icon}</span>{item.name}</button>)}</div>}
+      {activePage === 'categories' && <div className="category-list">{categories.map((item) => <button key={item.id} className="category" onClick={() => { setCategory(item.id); go('menu') }}><span>{item.icon}</span>{item.name}</button>)}</div>}</>}
+      {loading ? <div className="empty-state">Loading menu…</div> : <div className="menu-grid">{items.map((item) => <article className="dish-card" key={item.id}><button className="image-button" onClick={() => setSelected(item)}><>{item.image_url ? <img src={item.image_url} alt="" /> : <div className="image-placeholder">🍽</div>}</>{item.is_offer && <span className="discount-badge">OFFER</span>}</button><div className="dish-info"><h3>{item.name}</h3><p>{item.description}</p><div className="price-line"><strong>{session.currency} {Number(item.is_offer ? item.offer_price : item.price).toLocaleString()}</strong>{item.is_offer && <s>{session.currency} {Number(item.price).toLocaleString()}</s>}</div></div></article>)}</div>}
+      {!loading && !items.length && <div className="empty-state">No items found.</div>}
     </section>
-
-    {searchOpen && <div className="overlay" role="dialog" aria-modal="true" aria-label="Search the menu"><div className="search-modal"><div className="modal-top"><h2>Search menu</h2><button type="button" onClick={() => setSearchOpen(false)} aria-label="Close search">×</button></div><label className="search-field"><span>⌕</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="What are you craving?" /></label><p className="search-hint">Search for a dish or ingredient</p>{query && <div className="search-results">{visibleItems.map((item) => <button key={item.id} type="button" onClick={() => { setSelectedItem(item); setSearchOpen(false) }}><img src={item.image} alt="" /><span><strong>{item.name}</strong><small>PKR {item.price.toLocaleString()}</small></span><b>→</b></button>)}</div>}</div></div>}
-    {selectedItem && <div className="overlay" role="dialog" aria-modal="true" aria-label={selectedItem.name}><article className="detail-modal"><button className="close-detail" type="button" onClick={() => setSelectedItem(null)} aria-label="Close details">×</button><img src={selectedItem.image} alt={selectedItem.name} /><div className="detail-content"><span className="eyebrow">{selectedItem.category}</span><h2>{selectedItem.name}</h2><p>{selectedItem.description}</p><div className="detail-bottom"><strong>PKR {(selectedItem.offer_price || selectedItem.price).toLocaleString()}</strong><button type="button" onClick={() => { showNotice(`${selectedItem.name} added`); setSelectedItem(null) }}>Add to table <span>+</span></button></div></div></article></div>}
-    {notice && <div className="toast" role="status">✓ {notice}</div>}
-  </main>
+    <nav className="bottom-nav">{Object.entries(pages).map(([id, [, icon]]) => <button key={id} className={activePage === id ? 'nav-item active' : 'nav-item'} onClick={() => go(id)}><span>{icon}</span>{pages[id][0]}</button>)}</nav>
+  </section>{selected && <div className="overlay" role="dialog"><article className="detail-modal"><button className="close-detail" onClick={() => setSelected(null)}>×</button>{selected.image_url && <img src={selected.image_url} alt={selected.name} />}<div className="detail-content"><h2>{selected.name}</h2><p>{selected.description}</p><strong>{session.currency} {Number(selected.is_offer ? selected.offer_price : selected.price).toLocaleString()}</strong></div></article></div>}</main>
 }

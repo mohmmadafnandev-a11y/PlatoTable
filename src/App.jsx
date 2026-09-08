@@ -2,51 +2,49 @@ import { useEffect, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
 import CustomerApp from './components/CustomerApp'
 import AdminApp from './components/AdminApp'
-import { supabase } from './lib/supabase'
+import { isSupabaseConfigured, supabase } from './lib/supabase'
 import './App.css'
 
-function ScanError({ reason }) {
-  const expired = reason === 'expired'
-  const inactive = reason === 'inactive'
-  const title = expired ? 'Your session has expired' : inactive ? 'This QR code is inactive' : 'This QR code is not recognised'
-  const message = expired ? 'For your security, table sessions end after 15 minutes.' : inactive ? 'Please ask a member of staff for a current table QR code.' : 'Please scan the QR code displayed on your table and try again.'
-  return <main className="scan-error"><div className="brand-mark">S</div><span>{expired ? '⏱' : inactive ? '⊘' : '⌁'}</span><h1>{title}</h1><p>{message}</p><a href="/">Return to menu →</a></main>
+function ScanError({ reason = 'invalid' }) {
+  const content = {
+    expired: ['Session expired', 'Your table session has ended. Please scan the QR code on your table again.'],
+    inactive: ['QR not available', 'This QR code has been deactivated. Please ask a member of staff for help.'],
+    invalid: ['Please scan again', 'This link is not a valid table QR code. Scan the QR code displayed on your table.'],
+  }[reason] || ['Please scan again', 'This QR code could not be verified.']
+  return <main className="scan-error"><div className="brand-mark">P</div><span>{reason === 'expired' ? '⏱' : '⌁'}</span><h1>{content[0]}</h1><p>{content[1]}</p></main>
 }
 
 function ScanRoute() {
   const { token } = useParams()
-  const [validation, setValidation] = useState(supabase ? 'loading' : 'demo')
+  const [result, setResult] = useState(() => isSupabaseConfigured && token ? null : { valid: false, reason: 'invalid' })
 
   useEffect(() => {
-    if (!supabase || token === 'invalid' || token === 'expired') return
+    let active = true
+    if (!isSupabaseConfigured || !token) return undefined
     const validate = async () => {
       const { data, error } = await supabase.rpc('validate_qr', {
         scan_token: token,
         scan_user_agent: navigator.userAgent,
-        scan_device_type: /Mobi|Android/i.test(navigator.userAgent) ? 'mobile' : 'desktop',
+        scan_device_type: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) ? 'mobile' : 'desktop',
       })
-      if (error) {
-        // Keep the designed demo usable until the supplied migration is applied.
-        setValidation('demo')
-        return
-      }
-      setValidation(data?.[0]?.valid ? 'active' : data?.[0]?.reason || 'invalid')
+      if (active) setResult(error ? { valid: false, reason: 'invalid' } : data?.[0] || { valid: false, reason: 'invalid' })
     }
     validate()
+    return () => { active = false }
   }, [token])
 
-  if (token === 'invalid' || token === 'expired') return <ScanError reason={token} />
-  if (validation === 'loading') return <main className="scan-error"><div className="brand-mark">S</div><span className="scan-spinner" /><h1>Preparing your table</h1><p>We’re opening today’s menu for you.</p></main>
-  if (!['active', 'demo'].includes(validation)) return <ScanError reason={validation} />
-  return <CustomerApp />
+  if (!result) return <main className="scan-error"><div className="brand-mark">P</div><span className="scan-spinner" /><h1>Opening your table menu</h1><p>Please wait a moment.</p></main>
+  if (!result.valid) return <ScanError reason={result.reason} />
+  return <CustomerApp session={result} />
 }
 
 export default function App() {
   return <BrowserRouter><Routes>
-    <Route path="/" element={<CustomerApp />} />
-    <Route path="/scan/:token" element={<ScanRoute />} />
+    <Route path="/" element={<Navigate to="/scan" replace />} />
+    <Route path="/scan" element={<ScanError />} />
+    <Route path="/scan/:token/*" element={<ScanRoute />} />
     <Route path="/admin/login" element={<AdminApp login />} />
     <Route path="/admin/*" element={<AdminApp />} />
-    <Route path="*" element={<Navigate to="/" replace />} />
+    <Route path="*" element={<Navigate to="/scan" replace />} />
   </Routes></BrowserRouter>
 }
