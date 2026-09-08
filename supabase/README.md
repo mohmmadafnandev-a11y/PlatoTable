@@ -19,17 +19,17 @@ values ('My Restaurant', 'my-restaurant', 'owner@example.com', 'PKR')
 returning id;
 ```
 
-4. Create an owner account in **Authentication → Users**. Copy its user UUID, then link it to the restaurant:
+4. Create an owner account in **Authentication → Users**. For the requested default login, create the user with email `admin@palatotabale.local` and password `admin`. The login page maps the username `admin` to that Auth email. Copy its user UUID, then link it to the restaurant:
 
 ```sql
 insert into public.restaurant_admins (restaurant_id, user_id, username, role)
-values ('<RESTAURANT_UUID>', '<AUTH_USER_UUID>', 'owner', 'owner');
+values ('<RESTAURANT_UUID>', '<AUTH_USER_UUID>', 'admin', 'owner');
 
 insert into public.settings (restaurant_id)
 values ('<RESTAURANT_UUID>');
 ```
 
-5. Sign in at `/admin/login`. Add categories, menu items, offers, and table QR codes from the admin panel.
+5. Sign in at `/admin/login` with username `admin` and password `admin`. Change this default password before production use. Add categories, menu items, offers, and table QR codes from the admin panel.
 
 The customer menu only loads through a valid `/scan/:token` URL. QR tokens and scan logs are not publicly readable; the `validate_qr` and `get_scan_menu` RPCs provide only the validated data needed by a guest session.
 
