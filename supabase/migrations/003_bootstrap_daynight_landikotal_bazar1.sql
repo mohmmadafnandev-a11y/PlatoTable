@@ -1,11 +1,10 @@
--- Run after 001 and 002, after creating this user in Supabase Dashboard:
--- Authentication > Users > Add user
--- Email: admin@palatotabale.local
--- Password: admin
--- Enable "Auto Confirm User" when creating it.
+-- Initial empty restaurant setup for this DayNight Landikotal Bazar build.
+-- First create and auto-confirm this user in Supabase Dashboard > Authentication > Users:
+-- Email: admin@daynight-landikotal-bazar1.local
+-- Password: use a secure password of at least 6 characters.
 --
--- This creates only the initial PalatoTabale restaurant, its settings, and
--- its owner membership. It does not add categories, menu items, offers, or QR codes.
+-- This creates only the restaurant, settings, and owner membership.
+-- It does not create menu items, categories, offers, QR codes, or scan logs.
 
 do $$
 declare
@@ -14,14 +13,14 @@ declare
 begin
   select id into owner_id
   from auth.users
-  where email = 'admin@palatotabale.local';
+  where email = 'admin@daynight-landikotal-bazar1.local';
 
   if owner_id is null then
-    raise exception 'Create and auto-confirm admin@palatotabale.local in Supabase Auth before running this script.';
+    raise exception 'Create and auto-confirm admin@daynight-landikotal-bazar1.local in Supabase Auth first.';
   end if;
 
   insert into public.restaurants (name, subdomain, owner_email, currency)
-  values ('PalatoTabale', 'palatotabale', 'admin@palatotabale.local', 'PKR')
+  values ('DayNight Landikotal Bazar', 'daynight-landikotal-bazar1', 'admin@daynight-landikotal-bazar1.local', 'PKR')
   on conflict (subdomain) do update
     set name = excluded.name,
         owner_email = excluded.owner_email
