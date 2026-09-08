@@ -10,6 +10,7 @@ VITE_SUPABASE_ANON_KEY=your-publishable-anon-key
 2. In the SQL Editor, run these migrations in sequence:
    - `migrations/001_initial_schema.sql`
    - `migrations/002_secure_customer_menu.sql`
+   - `migrations/003_bootstrap_palatotabale_admin.sql` — run this after creating the Auth user described in that file
 
 3. Create the restaurant (replace the values):
 
@@ -19,7 +20,9 @@ values ('My Restaurant', 'my-restaurant', 'owner@example.com', 'PKR')
 returning id;
 ```
 
-4. Create an owner account in **Authentication → Users**. For the requested default login, create the user with email `admin@palatotabale.local` and password `admin`. The login page maps the username `admin` to that Auth email. Copy its user UUID, then link it to the restaurant:
+4. To use the requested default login, create the user `admin@palatotabale.local` with password `admin` in **Authentication → Users** and enable **Auto Confirm User**. Then run `migrations/003_bootstrap_palatotabale_admin.sql`; it creates the restaurant, owner membership, and settings with no menu or other demo data.
+
+For custom restaurant ownership instead, create an owner account in **Authentication → Users**. Copy its user UUID, then link it to the restaurant:
 
 ```sql
 insert into public.restaurant_admins (restaurant_id, user_id, username, role)
