@@ -45,10 +45,93 @@ function Dashboard() {
   return <><div className="admin-heading"><div><span className="admin-kicker">MONDAY, 7 SEPTEMBER</span><h1>Good morning, Ayaan</h1><p>Here’s what’s happening at Saffron Table today.</p></div><button className="admin-primary">＋ Add menu item</button></div><div className="stats-grid">{stats.map(([label, value, detail, icon]) => <article className="stat-card" key={label}><div className="stat-icon">{icon}</div><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>)}</div><div className="dashboard-grid"><article className="admin-card chart-card"><div className="card-heading"><div><span>QR scans</span><strong>Guest activity</strong></div><button>Last 7 days⌄</button></div><div className="chart-total"><strong>1,284</strong><span>↗ 12.4%</span></div><div className="bar-chart">{[42, 58, 48, 76, 65, 92, 72].map((height, index) => <div key={height}><span style={{ height: `${height}%` }} /><small>{['M', 'T', 'W', 'T', 'F', 'S', 'S'][index]}</small></div>)}</div></article><article className="admin-card popular-card"><div className="card-heading"><div><span>This week</span><strong>Popular dishes</strong></div><button>View all</button></div>{fallbackMenuItems.slice(0, 4).map((item, index) => <div className="popular-row" key={item.id}><b>0{index + 1}</b><img src={item.image} alt="" /><span><strong>{item.name}</strong><small>{22 - index * 3}% of views</small></span><em>PKR {item.price}</em></div>)}</article></div><article className="admin-card activity-card"><div className="card-heading"><div><span>Live updates</span><strong>Recent table activity</strong></div><button>See live view →</button></div><div className="activity-table"><div className="activity-head"><span>TABLE</span><span>DEVICE</span><span>SCANNED</span><span>STATUS</span></div>{recentScans.map((scan) => <div className="activity-row" key={`${scan.table}-${scan.time}`}><strong>{scan.table}</strong><span>{scan.device}</span><span>{scan.time}</span><i className={scan.status.toLowerCase()}>{scan.status}</i></div>)}</div></article></>
 }
 
+const restaurantId = '11111111-1111-4111-8111-111111111111'
+const categoryIds = {
+  starters: '21111111-1111-4111-8111-111111111111',
+  mains: '21111111-1111-4111-8111-111111111112',
+  grills: '21111111-1111-4111-8111-111111111113',
+  drinks: '21111111-1111-4111-8111-111111111114',
+  desserts: '21111111-1111-4111-8111-111111111115',
+}
+
+function getSavedMenu() {
+  try {
+    const saved = localStorage.getItem('saffron-menu')
+    return saved ? JSON.parse(saved) : fallbackMenuItems
+  } catch {
+    return fallbackMenuItems
+  }
+}
+
 function MenuManager() {
-  const [items, setItems] = useState(fallbackMenuItems)
-  const toggle = (id) => setItems(items.map((item) => item.id === id ? { ...item, is_available: !item.is_available } : item))
-  return <><div className="admin-heading"><div><span className="admin-kicker">48 ITEMS · 6 CATEGORIES</span><h1>Menu management</h1><p>Curate what your guests see on the digital menu.</p></div><button className="admin-primary">＋ Add new item</button></div><div className="manage-toolbar"><label>⌕ <input placeholder="Search menu items…" /></label><button>All categories⌄</button><button>All statuses⌄</button></div><div className="admin-menu-grid">{items.map((item) => <article className={`admin-dish ${item.is_available ? '' : 'unavailable'}`} key={item.id}><img src={item.image} alt="" /><div><span className="admin-kicker">{item.category}</span><h3>{item.name}</h3><p>{item.description}</p><footer><strong>PKR {item.price.toLocaleString()}</strong><button onClick={() => toggle(item.id)} className={item.is_available ? 'toggle on' : 'toggle'}><span />{item.is_available ? 'Available' : 'Sold out'}</button></footer></div></article>)}</div></>
+  const [items, setItems] = useState(getSavedMenu)
+  const [query, setQuery] = useState('')
+  const [editing, setEditing] = useState(null)
+  const [message, setMessage] = useState('')
+
+  useEffect(() => {
+    localStorage.setItem('saffron-menu', JSON.stringify(items))
+  }, [items])
+
+  useEffect(() => {
+    if (!supabase || localStorage.getItem('saffron-admin') === 'demo') return
+    const loadItems = async () => {
+      const { data, error } = await supabase.from('menu_items').select('*, categories(name)').order('display_order')
+      if (!error && data?.length) setItems(data.map((item) => ({ ...item, image: item.image_url, category: item.categories?.name?.toLowerCase() || 'mains', time: '15–25 min' })))
+    }
+    loadItems()
+  }, [])
+
+  const syncItem = async (item) => {
+    if (!supabase || localStorage.getItem('saffron-admin') === 'demo') return
+    await supabase.from('menu_items').upsert({
+      id: item.id,
+      restaurant_id: restaurantId,
+      category_id: categoryIds[item.category] || categoryIds.mains,
+      name: item.name,
+      description: item.description,
+      price: item.price,
+      image_url: item.image,
+      is_available: item.is_available,
+    })
+  }
+
+  const saveItem = async (event) => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const item = {
+      id: editing?.id || crypto.randomUUID(),
+      name: form.get('name').trim(),
+      category: form.get('category'),
+      price: Number(form.get('price')),
+      image: form.get('image').trim() || fallbackMenuItems[0].image,
+      description: form.get('description').trim(),
+      time: editing?.time || '15–25 min',
+      is_available: editing?.is_available ?? true,
+    }
+    setItems((current) => current.some((entry) => entry.id === item.id) ? current.map((entry) => entry.id === item.id ? item : entry) : [item, ...current])
+    await syncItem(item)
+    setEditing(null)
+    setMessage(editing?.id ? 'Menu item updated' : 'Menu item created')
+  }
+
+  const toggle = async (item) => {
+    const updated = { ...item, is_available: !item.is_available }
+    setItems((current) => current.map((entry) => entry.id === item.id ? updated : entry))
+    await syncItem(updated)
+  }
+
+  const remove = async (item) => {
+    if (!window.confirm(`Delete ${item.name}?`)) return
+    setItems((current) => current.filter((entry) => entry.id !== item.id))
+    if (supabase && localStorage.getItem('saffron-admin') !== 'demo') await supabase.from('menu_items').delete().eq('id', item.id)
+    setMessage('Menu item deleted')
+  }
+
+  const visibleItems = items.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(query.toLowerCase()))
+  const emptyItem = { name: '', category: 'mains', price: '', image: '', description: '', is_available: true }
+
+  return <><div className="admin-heading"><div><span className="admin-kicker">{items.length} ITEMS · 6 CATEGORIES</span><h1>Menu management</h1><p>Curate what your guests see on the digital menu.</p></div><button className="admin-primary" onClick={() => setEditing(emptyItem)}>＋ Add new item</button></div>{message && <div className="admin-success">✓ {message}<button onClick={() => setMessage('')}>×</button></div>}<div className="manage-toolbar"><label>⌕ <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search menu items…" /></label><button>All categories⌄</button><button>All statuses⌄</button></div><div className="admin-menu-grid">{visibleItems.map((item) => <article className={`admin-dish ${item.is_available ? '' : 'unavailable'}`} key={item.id}><div className="admin-dish-image"><img src={item.image} alt="" /><div><button onClick={() => setEditing(item)}>Edit</button><button onClick={() => remove(item)}>Delete</button></div></div><div><span className="admin-kicker">{item.category}</span><h3>{item.name}</h3><p>{item.description}</p><footer><strong>PKR {Number(item.price).toLocaleString()}</strong><button onClick={() => toggle(item)} className={item.is_available ? 'toggle on' : 'toggle'}><span />{item.is_available ? 'Available' : 'Sold out'}</button></footer></div></article>)}</div>{!visibleItems.length && <div className="admin-empty">No menu items match your search.</div>}{editing && <div className="admin-modal-backdrop" role="dialog" aria-modal="true" aria-label="Menu item editor"><form className="admin-modal" onSubmit={saveItem}><header><div><span className="admin-kicker">MENU EDITOR</span><h2>{editing.id ? 'Edit menu item' : 'Add new item'}</h2></div><button type="button" onClick={() => setEditing(null)}>×</button></header><div className="admin-form-grid"><label>Item name<input name="name" required defaultValue={editing.name} placeholder="e.g. Smoky Chicken Karahi" /></label><label>Category<select name="category" defaultValue={editing.category}>{Object.keys(categoryIds).map((category) => <option key={category} value={category}>{category[0].toUpperCase() + category.slice(1)}</option>)}</select></label><label>Price (PKR)<input name="price" required min="0" type="number" defaultValue={editing.price} placeholder="1290" /></label><label>Image URL<input name="image" type="url" defaultValue={editing.image} placeholder="https://…" /></label><label className="full">Description<textarea name="description" rows="4" defaultValue={editing.description} placeholder="Describe the flavours and ingredients…" /></label></div><footer><button type="button" onClick={() => setEditing(null)}>Cancel</button><button className="admin-primary">{editing.id ? 'Save changes' : 'Create item'} →</button></footer></form></div>}</>
 }
 
 function QrCard({ table, token, active = true }) {
