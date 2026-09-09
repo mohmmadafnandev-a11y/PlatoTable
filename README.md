@@ -4,11 +4,12 @@ A premium digital restaurant menu and management platform built with React, Vite
 
 ## Features
 
-- Responsive customer menu with categories, search, offers, and item details
-- QR-based table sessions with secure Supabase validation
-- Premium admin dashboard for menu, offers, QR codes, and live activity
+- Mobile-only customer menu with categories, search, settings, and item details
+- Permanent per-table QR codes with 15-minute secure Supabase sessions
+- Responsive admin dashboard for menu, categories, QR codes, settings, and live activity
 - Downloadable QR code generation
 - Supabase Auth, PostgreSQL, Storage, and Row Level Security foundation
+- A dedicated Supabase Storage bucket per restaurant build
 - Real Supabase-backed restaurant data; no customer or admin demo fallback
 
 ## Local development
@@ -30,22 +31,15 @@ Only use the publishable anon key in the frontend. Never commit database passwor
 
 ## Supabase setup
 
-Run these files in the Supabase SQL editor in order:
-
-1. `supabase/migrations/001_initial_schema.sql`
-2. `supabase/migrations/002_secure_customer_menu.sql`
-
-Create your first restaurant and admin user using the SQL in `supabase/README.md`.
-
-See `supabase/README.md` for instructions on linking an authenticated admin user.
+Run `supabase/delete.sql` only to remove obsolete server-session, scan-log, and offer remnants. It preserves restaurant data, permanent QR codes, and the dedicated `daynight-landikotal-bazar1` Storage bucket. Then run the safe `supabase/schema.sql` setup. See `supabase/README.md` for the exact run order.
 
 ## Routes
 
 - `/scan` — missing/invalid QR guidance
-- `/scan/:token` — validated table menu session
+- `/scan/:token` — starts or validates the 15-minute table menu session
+- `/scan/:token?session=:sessionToken` — existing table menu session
 - `/scan/:token/search` — customer search page
-- `/scan/:token/offers` — active offers
-- `/scan/:token/categories` — category picker
+- `/scan/:token/settings` — customer contact and display settings
 - `/admin/login` — staff login
 - `/admin` — restaurant management dashboard
 
