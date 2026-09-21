@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom'
+import { Route, Routes, useParams, useSearchParams } from 'react-router-dom'
 import CustomerApp from './components/CustomerApp'
 import AdminApp from './components/AdminApp'
+import Landing from './components/Landing'
+import NotFound from './components/NotFound'
+import SuperAdminApp from './superadmin/App'
+import TenantWelcome from './components/TenantWelcome'
 import { supabase } from './lib/supabase'
 import { restaurantName } from './lib/restaurant-config'
+import { RESERVED_SLUGS } from './lib/tenant'
 import './App.css'
 
 function ScanError({ reason = 'invalid' }) {
@@ -11,6 +16,7 @@ function ScanError({ reason = 'invalid' }) {
     expired: ['Session expired', 'Your 15-minute table session has ended. Please scan the QR code on your table again.'],
     inactive: ['QR not available', 'This QR code has been deactivated. Please ask a member of staff for help.'],
     invalid: ['Please scan again', 'This link is not a valid table QR code. Scan the QR code displayed on your table.'],
+    subscription: ['Menu temporarily unavailable', 'This restaurant menu is temporarily unavailable. Please ask a member of staff for help.'], 
   }[reason] || ['Please scan again', 'This QR code could not be verified.']
   return <main className="scan-error"><div className="brand-mark">P</div><span>{reason === 'expired' ? '⏱' : '⌁'}</span><h1>{content[0]}</h1><p>{content[1]}</p></main>
 }
@@ -35,12 +41,12 @@ function ScanRoute() {
     const finish = (value) => { if (active) setResult(value) }
     const getMenuData = async () => {
       const { data, error } = await supabase.rpc('get_scan_menu', { scan_token: token })
-      return !error && data?.valid ? data : null
+      return !error && data ? data : null
     }
     const openLocalSession = async () => {
       const menuData = await getMenuData()
       if (!active) return
-      if (!menuData) { finish({ valid: false, reason: 'invalid' }); return }
+      if (!menuData?.valid) { finish({ valid: false, reason: menuData?.reason || 'invalid' }); return }
       if (sessionToken) {
         const saved = readLocalSession(token, sessionToken)
         if (!saved) { finish({ valid: false, reason: 'invalid' }); return }
@@ -66,13 +72,25 @@ function ScanRoute() {
   return <CustomerApp session={result} />
 }
 
+// The /admin branch is decided here rather than by route ranking, because the
+// router cannot know that "login" and "settings" are Super Admin pages while
+// "daynight" is a restaurant. Reserved slugs belong to the platform; anything
+// else is a tenant slug.
+function AdminArea() {
+  const { '*': rest = '' } = useParams()
+  const segments = rest.split('/').filter(Boolean)
+  const slug = segments[0] || ''
+  if (!slug || RESERVED_SLUGS.has(slug)) return <SuperAdminApp />
+  return <AdminApp login={segments[1] === 'login'} />
+}
+
 export default function App() {
-  return <BrowserRouter><Routes>
-    <Route path="/" element={<Navigate to="/scan" replace />} />
+  return <Routes>
+    <Route path="/" element={<Landing />} />
     <Route path="/scan" element={<ScanError />} />
     <Route path="/scan/:token/*" element={<ScanRoute />} />
-    <Route path="/admin/login" element={<AdminApp login />} />
-    <Route path="/admin/*" element={<AdminApp />} />
-    <Route path="*" element={<Navigate to="/scan" replace />} />
-  </Routes></BrowserRouter>
+    <Route path="/admin/*" element={<AdminArea />} />
+    <Route path="/:slug" element={<TenantWelcome />} />
+    <Route path="*" element={<NotFound />} />
+  </Routes>
 }

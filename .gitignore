@@ -25,3 +25,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Key material — never commit these
+super_admin/superadmin/Stripe.md
+super_admin/superadmin/supabase.md
+*secrets*.md
+*keys*.md

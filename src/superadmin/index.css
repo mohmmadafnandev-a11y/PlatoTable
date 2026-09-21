@@ -1,0 +1,63 @@
+/* Super Admin styles.
+   Tailwind is imported as theme + utilities only. Its preflight is deliberately
+   left out: preflight targets :root and html, which would repaint the customer
+   menu and the restaurant admin, both of which use a separate plain-CSS design
+   system. The layer order is declared up front so utilities still override the
+   scoped reset below, exactly as they override preflight. */
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Scoped replacement for preflight. This is not optional: the Super Admin
+   markup is written against preflight, so dropping it entirely would leave
+   every heading at the browser's default size and margin. */
+@layer base {
+  .sa-scope *,
+  .sa-scope *::before,
+  .sa-scope *::after { box-sizing: border-box; border: 0 solid; }
+
+  .sa-scope h1, .sa-scope h2, .sa-scope h3,
+  .sa-scope h4, .sa-scope h5, .sa-scope h6 {
+    margin: 0;
+    font-size: inherit;
+    font-weight: inherit;
+  }
+
+  .sa-scope p, .sa-scope dl, .sa-scope dd, .sa-scope figure,
+  .sa-scope blockquote, .sa-scope fieldset, .sa-scope legend { margin: 0; }
+
+  .sa-scope ul, .sa-scope ol { margin: 0; padding: 0; list-style: none; }
+
+  .sa-scope img, .sa-scope svg, .sa-scope video,
+  .sa-scope canvas { display: block; vertical-align: middle; max-width: 100%; }
+
+  .sa-scope table { border-collapse: collapse; }
+
+  .sa-scope button, .sa-scope input, .sa-scope select, .sa-scope textarea {
+    font: inherit;
+    color: inherit;
+    margin: 0;
+    background-color: transparent;
+  }
+
+  .sa-scope button { cursor: pointer; padding: 0; }
+  .sa-scope button:disabled { cursor: not-allowed; }
+  .sa-scope a { color: inherit; text-decoration: inherit; }
+}
+
+/* Brand declarations are intentionally unlayered: they must outrank the live
+   app's own unlayered :root rules. The extra :root raises specificity above
+   :root so the result does not depend on stylesheet import order. */
+:root .sa-scope {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  color: #111827;
+  background: #f8fafc;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  min-height: 100vh;
+}
