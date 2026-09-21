@@ -16,33 +16,13 @@ export const SUPER_ADMIN_BASE = '/admin'
 
 // Slugs that can never belong to a restaurant because they collide with a real
 // route. `/admin/login` is the sharpest example: it is the Super Admin sign-in
-// screen, so "login" must never resolve to a tenant. Every Super Admin segment
-// is in this list, which is what keeps /admin/<page> and /admin/<slug>
-// unambiguous.
-export const RESERVED_SLUGS = new Set([
-  'admin', 'api', 'assets', 'scan', 'login', 'logout', 'settings',
-  'restaurants', 'subscriptions', 'plans', 'notifications', 'analytics',
-  'team', 'logs', 'revenue', 'transactions', 'urls', 'dashboard', 'billing',
-  'payment', 'help', 'support', 'about', 'contact', 'terms', 'privacy',
-  'signup', 'signin', 'signout', 'register', 'auth',
-])
-
-export const SLUG_MIN = 3
-export const SLUG_MAX = 30
-
-// The onboarding form and the server-side endpoint must both enforce this, so
-// it lives in one place.
-export function slugError(slug) {
-  const value = String(slug ?? '').trim().toLowerCase()
-  if (!value) return 'Enter a subdomain.'
-  if (value.length < SLUG_MIN || value.length > SLUG_MAX) return `Use between ${SLUG_MIN} and ${SLUG_MAX} characters.`
-  if (!/^[a-z0-9-]+$/.test(value)) return 'Use lowercase letters, numbers, and hyphens only.'
-  if (value.startsWith('-') || value.endsWith('-')) return 'Cannot start or end with a hyphen.'
-  if (RESERVED_SLUGS.has(value)) return 'This subdomain is reserved. Please choose another.'
-  return ''
-}
-
-export const isValidSlug = (slug) => !slugError(slug)
+// screen, so "login" must never resolve to a tenant.
+//
+// The list itself lives in shared/slug.js because the onboarding form and the
+// serverless endpoint that creates restaurants import the same module — a slug
+// the form accepts can never be rejected server-side for a different reason.
+export { RESERVED_SLUGS, SLUG_MIN, SLUG_MAX, slugError, isValidSlug, slugify } from '../../shared/slug.js'
+import { RESERVED_SLUGS, isValidSlug } from '../../shared/slug.js'
 
 // Shared hosting domains, where every deployment is already a subdomain of the
 // platform itself. A tenant subdomain can never exist there, so those hosts

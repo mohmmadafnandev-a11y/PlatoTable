@@ -3,6 +3,7 @@ import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'reac
 import { BarChart3, Bell, Building2, ChevronDown, CircleDollarSign, CreditCard, FileClock, LayoutDashboard, LogOut, Menu, Search, Settings, ShieldCheck, Users, X } from 'lucide-react'
 import { supabase } from './lib/supabase'
 import { saPath } from '../lib/tenant'
+import { describeAuthError } from '../lib/auth-errors'
 import './App.css'
 import { Analytics, Logs, SystemSettings, Team } from './components/PhaseSix'
 import RestaurantOnboarding from './components/RestaurantOnboarding'
@@ -32,7 +33,11 @@ const navigation = [
 
 function App() {
   const [session, setSession] = useState(() => supabase ? undefined : null)
-  const [profile, setProfile] = useState(null)
+  // Three states, not two: undefined means the super_admins lookup has not
+  // answered yet, null means it answered and this account is not platform
+  // staff. Collapsing those into one value made every deep link race the
+  // lookup and bounce to the dashboard.
+  const [profile, setProfile] = useState(undefined)
   const [authError, setAuthError] = useState('')
 
   useEffect(() => {
@@ -53,7 +58,9 @@ function App() {
     return () => { alive = false }
   }, [session])
 
-  if (session === undefined) return <div className="sa-scope"><LoadingScreen /></div>
+  // Hold on the loading screen until the platform-staff check has answered.
+  // Redirecting on an unanswered check is what discarded the requested URL.
+  if (session === undefined || (session && profile === undefined)) return <div className="sa-scope"><LoadingScreen /></div>
   // These are descendant routes of the /admin/* route that mounts this app, so
   // the paths must be relative: a leading slash here would be resolved against
   // the parent and become /admin/admin/login.
@@ -67,7 +74,7 @@ function LoadingScreen() { return <main className="grid min-h-screen place-items
 
 function Login({ error }) {
   const navigate = useSuperAdminNavigate(); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [showPassword, setShowPassword] = useState(false); const [remember, setRemember] = useState(true); const [message, setMessage] = useState(''); const [loading, setLoading] = useState(false)
-  const submit = async (event) => { event.preventDefault(); if (!supabase) return setMessage('Add the public Supabase variables to .env.local before signing in.'); setLoading(true); setMessage(''); const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password }); if (signInError) { setMessage('Your email or password is incorrect.'); setLoading(false); return } if (!remember) sessionStorage.setItem('platotable-session-only', 'true'); navigate('/dashboard') }
+  const submit = async (event) => { event.preventDefault(); if (!supabase) return setMessage('Add the public Supabase variables to .env.local before signing in.'); setLoading(true); setMessage(''); const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password }); if (signInError) { setMessage(describeAuthError(signInError).message); setLoading(false); return } if (!remember) sessionStorage.setItem('platotable-session-only', 'true'); navigate('/dashboard') }
   const reset = async () => { if (!email.trim()) return setMessage('Enter your email address first, then choose password reset.'); if (!supabase) return; const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: `${window.location.origin}${saPath('/login')}` }); setMessage(resetError ? 'Could not send the reset email. Please try again.' : 'Password reset instructions were sent if this account exists.') }
   return <main className="login-glow grid min-h-screen place-items-center p-5"><section className="grid w-full max-w-5xl overflow-hidden rounded-[28px] bg-white shadow-2xl shadow-slate-950/20 lg:grid-cols-[.9fr_1.1fr]"><aside className="login-art relative hidden min-h-[620px] overflow-hidden p-11 text-white lg:flex lg:flex-col lg:justify-between"><div className="relative z-10 flex items-center gap-3 text-lg font-bold"><span className="grid h-10 w-10 place-items-center rounded-xl bg-white text-indigo-600">P</span>{appName}</div><div className="relative z-10 max-w-sm"><span className="text-xs font-semibold tracking-[.2em] text-indigo-200">PLATFORM CONTROL</span><h1 className="mt-5 text-5xl font-semibold leading-[1.04] tracking-tight">Every restaurant.<br /><span className="text-emerald-300">One clear view.</span></h1><p className="mt-5 text-sm leading-6 text-slate-200">Manage restaurants, subscriptions, revenue, and support from one secure workspace.</p></div><div className="relative z-10 flex items-center gap-2 text-xs font-medium text-slate-300"><ShieldCheck size={16} /> Enterprise-grade access controls</div></aside><section className="flex min-h-[620px] items-center justify-center p-7 sm:p-12"><form className="w-full max-w-sm" onSubmit={submit}><div className="mb-9"><div className="mb-6 flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-600 text-lg font-bold text-white lg:hidden">P</div><span className="text-xs font-semibold tracking-[.16em] text-indigo-600">SECURE ACCESS</span><h2 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Welcome back</h2><p className="mt-2 text-sm text-slate-500">Sign in to the {appName} Super Admin Panel.</p></div>{(message || error) && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{message || error}</div>}<label className="mb-5 grid gap-2 text-sm font-medium text-slate-700">Email address<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@platotable.com" className="h-12 rounded-lg border border-slate-300 px-3 text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" /></label><label className="mb-3 grid gap-2 text-sm font-medium text-slate-700">Password<div className="relative"><input required type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" className="h-12 w-full rounded-lg border border-slate-300 px-3 pr-16 text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" /><button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-2 px-2 text-xs font-semibold text-indigo-600">{showPassword ? 'Hide' : 'Show'}</button></div></label><div className="mb-7 flex items-center justify-between gap-3"><label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} className="h-4 w-4 rounded border-slate-300 accent-indigo-600" />Remember me</label><button type="button" onClick={reset} className="text-sm font-semibold text-indigo-600 hover:text-indigo-800">Forgot password?</button></div><button disabled={loading} className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 transition hover:bg-indigo-700 active:scale-[.99] disabled:opacity-60">{loading && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />}{loading ? 'Signing in…' : 'Sign in securely'}</button><p className="mt-7 flex items-center justify-center gap-2 text-xs text-slate-500"><ShieldCheck size={15} className="text-emerald-600" />Secure, restricted Super Admin access</p></form></section></section></main>
 }

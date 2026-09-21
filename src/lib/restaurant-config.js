@@ -7,8 +7,6 @@ export const restaurantSlug = resolveTenantSlug()
 
 export const restaurantName = import.meta.env.VITE_RESTAURANT_NAME || 'Restaurant'
 
-export const adminAuthEmail = restaurantSlug ? `admin@${restaurantSlug}.local` : ''
-
 // One shared bucket for every tenant. Objects are isolated by a
 // <restaurant_id>/ folder prefix, which is what the storage policies authorise
 // against, so the bucket must NOT be named per restaurant.
