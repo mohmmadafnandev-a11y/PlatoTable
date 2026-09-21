@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
+import { Mail, Phone } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import NotFound from './NotFound'
+import './Landing.css'
 
-// Visiting /<slug> carries no QR token, so there is no table and no session to
-// open. Show branded confirmation and ask the guest to scan their table code.
+// /<slug> carries no QR token, so there is no table and no session to open. It
+// is not a menu: it is the restaurant's public card, so someone who has the
+// link can see who they are and how to reach them. Unknown slugs stay a 404.
 export default function TenantWelcome() {
   const { slug } = useParams()
   const [tenant, setTenant] = useState(null)
@@ -26,14 +29,77 @@ export default function TenantWelcome() {
     return () => { active = false }
   }, [slug])
 
-  if (state === 'loading') return <main className="scan-error"><div className="brand-mark">P</div><span className="scan-spinner" /><h1>Loading menu</h1><p>Please wait a moment.</p></main>
+  if (state === 'loading') {
+    return (
+      <div className="lp-root lp-tenant">
+        <div className="lp-tenant-card">
+          <div className="lp-tenant-logo lp-qr-skeleton" aria-hidden="true" />
+          <h1>Loading</h1>
+          <p>Please wait a moment.</p>
+        </div>
+      </div>
+    )
+  }
   if (state === 'missing') return <NotFound />
-  if (state === 'unavailable') return <main className="scan-error"><div className="brand-mark">P</div><span>⌁</span><h1>Menu unavailable</h1><p>This restaurant menu cannot be loaded right now. Please ask a member of staff for help.</p></main>
+  if (state === 'unavailable') {
+    return (
+      <div className="lp-root lp-tenant">
+        <div className="lp-tenant-card">
+          <div className="lp-tenant-initial">P</div>
+          <h1>Not available</h1>
+          <p>This restaurant page cannot be loaded right now. Please try again shortly.</p>
+        </div>
+      </div>
+    )
+  }
 
-  return <main className="scan-error">
-    <div className="brand-mark">P</div>
-    <span>▣</span>
-    <h1>{tenant.name}</h1>
-    <p>Scan the QR code on your table to see our menu.</p>
-  </main>
+  const name = tenant.name || 'Restaurant'
+  return (
+    <div className="lp-root lp-tenant">
+      <div className="lp-tenant-card lp-pop">
+        {tenant.logo_url
+          ? <img className="lp-tenant-logo" src={tenant.logo_url} alt={`${name} logo`} />
+          : <div className="lp-tenant-initial">{(name.trim()[0] || 'R').toUpperCase()}</div>}
+
+        <h1>{name}</h1>
+        <p className="lp-tenant-role">Restaurant on Plato Table</p>
+        <p>
+          {name} uses Plato Table for its digital menu. If you would like to visit, order, or ask
+          about anything at all, their contact details are below.
+        </p>
+
+        {(tenant.phone || tenant.contact_email) && (
+          <div className="lp-tenant-links">
+            {tenant.phone && (
+              <a className="lp-contact-item" href={`tel:${String(tenant.phone).replace(/[^\d+]/g, '')}`}>
+                <span className="lp-contact-icon"><Phone size={19} /></span>
+                <span>
+                  <small>Phone</small>
+                  <strong>{tenant.phone}</strong>
+                </span>
+              </a>
+            )}
+            {tenant.contact_email && (
+              <a className="lp-contact-item" href={`mailto:${tenant.contact_email}`}>
+                <span className="lp-contact-icon"><Mail size={19} /></span>
+                <span>
+                  <small>Email</small>
+                  <strong>{tenant.contact_email}</strong>
+                </span>
+              </a>
+            )}
+          </div>
+        )}
+
+        {tenant.address && <p className="lp-tenant-role" style={{ color: 'inherit', letterSpacing: 0, textTransform: 'none', fontWeight: 500 }}>{tenant.address}</p>}
+
+        <p className="lp-tenant-scan">
+          Sitting at a table? Scan the QR code on your table to open the live menu.
+        </p>
+        <p className="lp-tenant-foot">
+          Powered by <Link to="/">Plato Table</Link> · digital menus for restaurants
+        </p>
+      </div>
+    </div>
+  )
 }
