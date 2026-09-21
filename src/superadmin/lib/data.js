@@ -9,7 +9,7 @@ import { supabase } from './supabase'
 // visible loading state is only wanted for an operator-triggered retry, so
 // `reload` sets it and is called from event handlers instead.
 
-function useRpc(name) {
+export function useRpc(name) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
