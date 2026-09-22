@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { BarChart3, Bell, Building2, ChevronDown, CircleDollarSign, CreditCard, FileClock, LayoutDashboard, Link2, LogOut, Menu, Moon, Receipt, Search, Settings, ShieldCheck, Sun, Users, X } from 'lucide-react'
+import { BarChart3, Bell, Building2, ChevronDown, CircleDollarSign, CreditCard, FileClock, LayoutDashboard, Link2, LogOut, Menu, Moon, PanelLeftClose, PanelLeftOpen, Receipt, Search, Settings, ShieldCheck, Sun, Users, X } from 'lucide-react'
 import { supabase } from './lib/supabase'
 import { saPath } from '../lib/tenant'
 import { describeAuthError } from '../lib/auth-errors'
@@ -20,6 +20,7 @@ import Transactions from './components/Transactions'
 import { StatusBadge } from './components/ui'
 import { useRestaurants } from './lib/data'
 import { useTheme } from '../lib/theme'
+import { useSidebar } from './lib/layout'
 import RestaurantOnboarding from './components/RestaurantOnboarding'
 
 const appName = import.meta.env.VITE_APP_NAME || 'Plato Table'
@@ -97,6 +98,7 @@ function Login({ error }) {
 
 function Shell({ profile, theme, toggleTheme }) {
   const [mobileOpen, setMobileOpen] = useState(false); const [menuOpen, setMenuOpen] = useState(false); const navigate = useSuperAdminNavigate(); const location = useLocation()
+  const { collapsed, toggle: toggleSidebar } = useSidebar()
   const signOut = async () => { await supabase.auth.signOut(); navigate('/login') }
   // The page is read straight from the URL instead of from a nested <Routes>,
   // which would resolve relative to the splat above and shift every path.
@@ -118,7 +120,46 @@ function Shell({ profile, theme, toggleTheme }) {
     settings: <SystemSettings profile={profile} />,
   }
   const content = pageViews[page] || <ComingSoon title={navigation.find((item) => item.to === location.pathname)?.label || 'Page'} />
-  return <main className="shell-gradient min-h-screen text-slate-900"><aside className={`fixed inset-y-0 left-0 z-30 flex w-64 flex-col border-r border-slate-200 bg-white p-4 transition-transform duration-200 md:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}><div className="flex items-center gap-3 px-3 py-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-indigo-600 font-bold text-white">P</span><div><strong className="block text-sm">{appName}</strong><span className="text-xs text-slate-500">Super Admin</span></div><button className="ml-auto text-slate-500 md:hidden" onClick={() => setMobileOpen(false)} aria-label="Close navigation"><X size={20} /></button></div><nav className="mt-7 grid gap-1">{navigation.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} onClick={() => setMobileOpen(false)} className="nav-link flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium"><Icon size={18} />{label}</NavLink>)}</nav><div className="mt-auto rounded-xl bg-slate-900 p-4 text-white"><p className="text-xs font-semibold text-indigo-200">PLATFORM STATUS</p><p className="mt-2 text-sm font-semibold">All systems operational</p><p className="mt-1 text-xs leading-5 text-slate-300">Manage your platform securely from one workspace.</p></div></aside>{mobileOpen && <button className="fixed inset-0 z-20 bg-slate-950/25 md:hidden" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}<section className="min-h-screen md:ml-64"><header className="sticky top-0 z-10 flex h-17 items-center gap-4 border-b border-slate-200 bg-white/90 px-5 backdrop-blur sm:px-8"><button onClick={() => setMobileOpen(true)} className="grid h-10 w-10 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 md:hidden" aria-label="Open navigation"><Menu size={21} /></button><label className="hidden max-w-sm flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-slate-400 sm:flex"><Search size={17} /><input className="h-10 w-full bg-transparent text-sm outline-none placeholder:text-slate-400" placeholder="Search restaurants, payments…" /></label><div className="ml-auto flex items-center gap-2"><button onClick={toggleTheme} className="grid h-10 w-10 place-items-center rounded-full text-slate-600 hover:bg-slate-100" aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} aria-pressed={theme === 'dark'}>{theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}</button><button className="relative grid h-10 w-10 place-items-center rounded-full text-slate-600 hover:bg-slate-100" aria-label="Notifications"><Bell size={19} /><span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" /></button><div className="relative"><button onClick={() => setMenuOpen(!menuOpen)} className="flex items-center gap-2 rounded-lg p-1.5 hover:bg-slate-100"><span className="grid h-8 w-8 place-items-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">{(profile.name || profile.email).slice(0, 2).toUpperCase()}</span><span className="hidden text-left sm:block"><strong className="block max-w-32 truncate text-xs">{profile.name || 'Platform admin'}</strong><small className="text-[11px] capitalize text-slate-500">{profile.role.replace('_', ' ')}</small></span><ChevronDown size={15} className="text-slate-500" /></button>{menuOpen && <div className="absolute right-0 top-12 w-48 rounded-xl border border-slate-200 bg-white p-1 shadow-xl"><button onClick={signOut} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"><LogOut size={16} />Sign out</button></div>}</div></div></header><div className="dashboard-enter mx-auto max-w-7xl p-5 sm:p-8">{content}</div></section></main>
+  return <main className={`sa-shell shell-gradient min-h-screen text-slate-900 ${collapsed ? 'is-collapsed' : ''}`}>
+    <aside className={`sa-aside fixed inset-y-0 left-0 z-30 flex flex-col border-r border-slate-200 bg-white p-4 md:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      <div className="sa-brand flex items-center gap-3 px-3 py-3">
+        <span className="grid h-9 w-9 flex-none place-items-center rounded-xl bg-indigo-600 font-bold text-white">P</span>
+        <div className="sa-brand-text min-w-0 flex-1">
+          <strong className="block truncate text-sm">{appName}</strong>
+          <span className="block truncate text-xs text-slate-500">Super Admin</span>
+        </div>
+        {/* Desktop only: on a phone the sidebar is a drawer, and a 5rem rail
+            there would be worse than no collapse at all. */}
+        <button
+          onClick={toggleSidebar}
+          className="hidden h-8 w-8 flex-none place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 md:grid"
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+        </button>
+        <button className="ml-auto text-slate-500 md:hidden" onClick={() => setMobileOpen(false)} aria-label="Close navigation"><X size={20} /></button>
+      </div>
+      <nav className="mt-7 grid gap-1">
+        {navigation.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} onClick={() => setMobileOpen(false)} className="nav-link relative flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium">
+          <Icon size={18} className="flex-none" />
+          {/* Left in the tree while collapsed, so the link still announces its
+              name to a screen reader when only the icon is on screen. */}
+          <span className="sa-label">{label}</span>
+          <span className="sa-tip" aria-hidden="true">{label}</span>
+        </NavLink>)}
+      </nav>
+      <div className="sa-status mt-auto rounded-xl bg-slate-900 p-4 text-white">
+        <div className="sa-status-row flex items-center gap-2">
+          <span className="h-2 w-2 flex-none rounded-full bg-emerald-400" />
+          <p className="sa-status-detail text-xs font-semibold text-indigo-200">PLATFORM STATUS</p>
+        </div>
+        <p className="sa-status-detail mt-2 text-sm font-semibold">All systems operational</p>
+        <p className="sa-status-detail mt-1 text-xs leading-5 text-slate-300">Manage your platform securely from one workspace.</p>
+      </div>
+    </aside>
+    {mobileOpen && <button className="fixed inset-0 z-20 bg-slate-950/25 md:hidden" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
+    <section className="sa-content min-h-screen"><header className="sticky top-0 z-10 flex h-17 items-center gap-4 border-b border-slate-200 bg-white/90 px-5 backdrop-blur sm:px-8"><button onClick={() => setMobileOpen(true)} className="grid h-10 w-10 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 md:hidden" aria-label="Open navigation"><Menu size={21} /></button><label className="hidden max-w-sm flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-slate-400 sm:flex"><Search size={17} /><input className="h-10 w-full bg-transparent text-sm outline-none placeholder:text-slate-400" placeholder="Search restaurants, payments…" /></label><div className="ml-auto flex items-center gap-2"><button onClick={toggleTheme} className="grid h-10 w-10 place-items-center rounded-full text-slate-600 hover:bg-slate-100" aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} aria-pressed={theme === 'dark'}>{theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}</button><button className="relative grid h-10 w-10 place-items-center rounded-full text-slate-600 hover:bg-slate-100" aria-label="Notifications"><Bell size={19} /><span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" /></button><div className="relative"><button onClick={() => setMenuOpen(!menuOpen)} className="flex items-center gap-2 rounded-lg p-1.5 hover:bg-slate-100"><span className="grid h-8 w-8 place-items-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">{(profile.name || profile.email).slice(0, 2).toUpperCase()}</span><span className="hidden text-left sm:block"><strong className="block max-w-32 truncate text-xs">{profile.name || 'Platform admin'}</strong><small className="text-[11px] capitalize text-slate-500">{profile.role.replace('_', ' ')}</small></span><ChevronDown size={15} className="text-slate-500" /></button>{menuOpen && <div className="absolute right-0 top-12 w-48 rounded-xl border border-slate-200 bg-white p-1 shadow-xl"><button onClick={signOut} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"><LogOut size={16} />Sign out</button></div>}</div></div></header><div className="dashboard-enter mx-auto max-w-7xl p-5 sm:p-8">{content}</div></section></main>
 }
 
 

@@ -5,7 +5,7 @@
 .login-art::before { content: ''; position: absolute; inset: 13%; border: 1px solid rgba(255,255,255,.14); border-radius: 32px; transform: rotate(-8deg); }
 .login-art::after { content: ''; position: absolute; width: 19rem; height: 19rem; right: -4rem; bottom: -5rem; border: 44px solid rgba(255,255,255,.1); border-radius: 50%; }
 .shell-gradient { background: radial-gradient(circle at 80% -15%, rgba(99,102,241,.11), transparent 28%), #f8fafc; }
-.nav-link { color: #64748b; transition: color .15s ease, background-color .15s ease, transform .15s ease; }
+.nav-link { color: #64748b; transition: color .15s ease, background-color .15s ease, transform .15s ease, border-color .15s ease; }
 .nav-link:hover { color: #3730a3; background: #eef2ff; }
 .nav-link:active { transform: scale(.98); }
 .nav-link.active { color: #4338ca; background: #eef2ff; box-shadow: inset 3px 0 #4f46e5; }
@@ -13,5 +13,104 @@
 .stat-card:hover { transform: translateY(-3px); box-shadow: 0 16px 35px rgba(15,23,42,.08); }
 .dashboard-enter { animation: dashboard-in .28s cubic-bezier(.2,.75,.3,1) both; }
 @keyframes dashboard-in { from { opacity: 0; transform: translate3d(0,10px,0); } to { opacity: 1; transform: translate3d(0,0,0); } }
+/* Sidebar rail ------------------------------------------------------------
+ *
+ * The open and closed widths live in ONE custom property, read by both the
+ * sidebar and the content's margin. Animating two hard-coded values separately
+ * would let them drift apart mid-transition and show a seam.
+ *
+ * Collapsing is desktop-only: on a phone the sidebar is an off-canvas drawer, so
+ * a 5rem rail there would be worse than useless. Every collapsed rule is inside
+ * the md breakpoint for that reason.
+ */
+.sa-shell { --sa-rail: 16rem; }
+
+.sa-aside {
+  width: 16rem;
+  /* Width carries the collapse; transform keeps carrying the mobile drawer. */
+  transition: transform .22s cubic-bezier(.2, .75, .3, 1), width .3s cubic-bezier(.2, .75, .3, 1);
+}
+
+.sa-content { transition: margin-left .3s cubic-bezier(.2, .75, .3, 1); }
+
+/* Labels are collapsed with max-width as well as opacity. Opacity alone would
+   leave the text occupying its space, so the icons would never actually move. */
+.sa-label,
+.sa-brand-text {
+  max-width: 12rem;
+  max-height: 3rem;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: opacity .16s ease, max-width .3s cubic-bezier(.2, .75, .3, 1), max-height .3s cubic-bezier(.2, .75, .3, 1);
+}
+
+/* Tooltip shown in place of the label while collapsed. Kept hidden by default
+   so that hovering an expanded item does not show a duplicate of its label. */
+.sa-tip {
+  position: absolute;
+  left: calc(100% + .7rem);
+  top: 50%;
+  z-index: 40;
+  padding: .42rem .68rem;
+  border-radius: .55rem;
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: .75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 12px 26px rgba(15, 23, 42, .3);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) translateX(-5px);
+  transition: opacity .14s ease, transform .2s cubic-bezier(.2, .75, .3, 1);
+}
+
+@media (min-width: 768px) {
+  .sa-shell.is-collapsed { --sa-rail: 5rem; }
+  .sa-aside { width: var(--sa-rail); }
+  .sa-content { margin-left: var(--sa-rail); }
+
+  .sa-shell.is-collapsed .sa-label,
+  .sa-shell.is-collapsed .sa-brand-text { opacity: 0; max-width: 0; max-height: 0; }
+
+  /* Stack the brand above its toggle: at 5rem wide there is no room for a row. */
+  .sa-shell.is-collapsed .sa-brand {
+    flex-direction: column;
+    gap: .5rem;
+    padding-inline: 0;
+  }
+
+  /* Each destination becomes a rounded icon box. The 3rem box plus the 1rem
+     sidebar padding is exactly the 5rem rail, so the icons sit centred. */
+  .sa-shell.is-collapsed .nav-link {
+    width: 3rem;
+    min-height: 3rem;
+    margin-inline: auto;
+    padding: 0;
+    justify-content: center;
+    /* The label is still present at zero width, so its flex gap would survive
+       and push the icon 6px off centre. */
+    gap: 0;
+    border: 1px solid transparent;
+    /* The 3px inset bar of the active state reads as a stray mark in a 3rem
+       square, so the collapsed rail marks the current page with a ring instead. */
+    box-shadow: none;
+  }
+  .sa-shell.is-collapsed .nav-link:hover { border-color: #e2e8f0; }
+  .sa-shell.is-collapsed .nav-link.active { box-shadow: none; border-color: #c7d2fe; }
+
+  .sa-shell.is-collapsed .nav-link:hover .sa-tip,
+  .sa-shell.is-collapsed .nav-link:focus-visible .sa-tip {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+
+  /* The status card keeps only its light, centred, rather than being hidden
+     altogether — the panel should never look like it lost a feature. */
+  .sa-shell.is-collapsed .sa-status { padding: .95rem .5rem; }
+  .sa-shell.is-collapsed .sa-status-detail { display: none; }
+  .sa-shell.is-collapsed .sa-status-row { justify-content: center; }
+}
+
 /* Scoped to .sa-scope: this stylesheet now shares a bundle with the customer menu and the restaurant admin, so a bare * selector would disable their animations too. */
 @media (prefers-reduced-motion: reduce) { .sa-scope *, .sa-scope *::before, .sa-scope *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
