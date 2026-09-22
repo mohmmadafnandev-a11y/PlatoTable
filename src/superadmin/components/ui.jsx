@@ -12,8 +12,11 @@ export function StatusBadge({ status = 'unconfigured' }) {
   )
 }
 
-export function Card({ children, className = '', as: Tag = 'article' }) {
-  return <Tag className={`rounded-xl border border-slate-200 bg-white p-5 shadow-sm ${className}`}>{children}</Tag>
+// `...rest` matters: a card is sometimes used as a form (`as="form"`) or a
+// region, and swallowing its props silently drops handlers like onSubmit —
+// which makes the browser perform a native submit and reload the page.
+export function Card({ children, className = '', as: Tag = 'article', ...rest }) {
+  return <Tag className={`rounded-xl border border-slate-200 bg-white p-5 shadow-sm ${className}`} {...rest}>{children}</Tag>
 }
 
 export function SectionHead({ eyebrow, title, description, action }) {

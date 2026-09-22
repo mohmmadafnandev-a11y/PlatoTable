@@ -53,6 +53,31 @@ export function useRestaurants() {
   return { restaurants, loading, error, reload }
 }
 
+/**
+ * The plan catalog. Read from the table rather than Stripe so the screen still
+ * renders when Stripe is unreachable — each row carries its own sync state, and
+ * a plan saved while Stripe was down is visible instead of missing.
+ */
+export function usePlans() {
+  const [plans, setPlans] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const load = useCallback(() => {
+    if (!supabase) return Promise.resolve()
+    return supabase.from('subscription_plans').select('*').order('interval').order('name').then(({ data, error: requestError }) => {
+      if (requestError) setError(requestError.message || 'The plan catalog could not be loaded.')
+      else { setPlans(Array.isArray(data) ? data : []); setError('') }
+      setLoading(false)
+    })
+  }, [])
+
+  const reload = useCallback(() => { setLoading(true); return load() }, [load])
+
+  useEffect(() => { load() }, [load])
+  return { plans, loading, error, reload, setPlans }
+}
+
 export function usePlatformSettings() {
   const [settings, setSettings] = useState(null)
   const [loading, setLoading] = useState(true)

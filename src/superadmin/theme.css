@@ -1,0 +1,168 @@
+/* Super Admin dark theme.
+ *
+ * The screens are written in Tailwind utility classes, so instead of adding a
+ * `dark:` variant to a hundred and one tokens across twelve files, this
+ * overrides the utilities the screens already use. These rules sit outside
+ * @layer, which means they beat Tailwind's layered utilities in the cascade —
+ * that is what makes an override possible without !important.
+ *
+ * `white` is deliberately NOT remapped through --color-white: text-white is
+ * used on indigo, slate, red, and emerald buttons, so a global remap would
+ * turn button labels dark. Surfaces are matched by their own class token
+ * instead, which leaves text-white untouched.
+ */
+
+.sa-scope[data-theme='dark'] {
+  color-scheme: dark;
+  /* The scope carries a light background from the brand declarations, which
+     would otherwise show through at the overscroll edge. */
+  background: #0b1220;
+  color: #e2e8f0;
+}
+
+.sa-scope[data-theme='light'] {
+  color-scheme: light;
+}
+
+/* Metadata grey. Slate-400 measures about 2.6:1 on white, which fails WCAG AA
+   for body text, so light mode drops one step to slate-500. This is safe to
+   apply globally because every text-slate-400 in the panel sits on a light
+   surface — the dark sidebar status card and the sign-in art panel use 200 and
+   300 — so it cannot dim text against a dark background. Dark mode gets its own
+   value from the rule further down. */
+.sa-scope[data-theme='light'] [class~='text-slate-400'] {
+  color: var(--color-slate-500, #64748b);
+}
+
+/* Page and shell ---------------------------------------------------------- */
+
+.sa-scope[data-theme='dark'] .shell-gradient {
+  background: radial-gradient(circle at 80% -15%, rgba(99, 102, 241, .16), transparent 30%), #0b1220;
+  color: #e2e8f0;
+}
+
+.sa-scope[data-theme='dark'] .nav-link { color: #94a3b8; }
+.sa-scope[data-theme='dark'] .nav-link:hover { color: #c7d2fe; background: rgba(99, 102, 241, .14); }
+.sa-scope[data-theme='dark'] .nav-link.active { color: #c7d2fe; background: rgba(99, 102, 241, .2); box-shadow: inset 3px 0 #818cf8; }
+
+.sa-scope[data-theme='dark'] .stat-card { background: #131c2e; border-color: #253048; }
+.sa-scope[data-theme='dark'] .stat-card:hover { box-shadow: 0 18px 36px rgba(0, 0, 0, .45); }
+
+/* Surfaces ---------------------------------------------------------------- */
+
+.sa-scope[data-theme='dark'] [class~='bg-white'] { background-color: #131c2e; }
+.sa-scope[data-theme='dark'] [class~='bg-white/90'] { background-color: rgba(11, 18, 32, .88); }
+.sa-scope[data-theme='dark'] [class~='bg-white/80'] { background-color: rgba(19, 28, 46, .8); }
+.sa-scope[data-theme='dark'] [class~='bg-slate-50'] { background-color: #182135; }
+.sa-scope[data-theme='dark'] [class~='bg-slate-100'] { background-color: #1e293b; }
+.sa-scope[data-theme='dark'] [class~='bg-slate-900'] { background-color: #060b16; }
+.sa-scope[data-theme='dark'] [class~='bg-slate-950/25'] { background-color: rgba(2, 6, 15, .7); }
+
+/* Semantic tints: the light tints glare against a dark page.
+   The list below is the complete set of bg-<family>-<step> tokens the panel
+   actually uses, extracted from the source rather than guessed. A tile whose
+   background is not remapped stays a light chip while its text turns light,
+   which is how the suspended and past-due badges became unreadable. */
+.sa-scope[data-theme='dark'] [class~='bg-indigo-50'] { background-color: rgba(99, 102, 241, .16); }
+.sa-scope[data-theme='dark'] [class~='bg-indigo-100'] { background-color: rgba(99, 102, 241, .26); }
+.sa-scope[data-theme='dark'] [class~='bg-emerald-50'] { background-color: rgba(16, 185, 129, .14); }
+.sa-scope[data-theme='dark'] [class~='bg-emerald-100'] { background-color: rgba(16, 185, 129, .24); }
+.sa-scope[data-theme='dark'] [class~='bg-amber-50'] { background-color: rgba(245, 158, 11, .14); }
+.sa-scope[data-theme='dark'] [class~='bg-amber-100'] { background-color: rgba(245, 158, 11, .22); }
+.sa-scope[data-theme='dark'] [class~='bg-red-50'] { background-color: rgba(239, 68, 68, .16); }
+.sa-scope[data-theme='dark'] [class~='bg-red-100'] { background-color: rgba(239, 68, 68, .22); }
+.sa-scope[data-theme='dark'] [class~='bg-sky-50'] { background-color: rgba(14, 165, 233, .14); }
+.sa-scope[data-theme='dark'] [class~='bg-violet-50'] { background-color: rgba(139, 92, 246, .16); }
+
+/* Text -------------------------------------------------------------------- */
+
+.sa-scope[data-theme='dark'] [class~='text-slate-900'] { color: #f1f5f9; }
+.sa-scope[data-theme='dark'] [class~='text-slate-800'] { color: #e2e8f0; }
+.sa-scope[data-theme='dark'] [class~='text-slate-700'] { color: #cbd5e1; }
+.sa-scope[data-theme='dark'] [class~='text-slate-600'] { color: #b6c2d1; }
+.sa-scope[data-theme='dark'] [class~='text-slate-500'] { color: #94a3b8; }
+.sa-scope[data-theme='dark'] [class~='text-slate-400'] { color: #7c8aa0; }
+
+.sa-scope[data-theme='dark'] [class~='text-indigo-600'] { color: #a5b4fc; }
+.sa-scope[data-theme='dark'] [class~='text-indigo-700'] { color: #c7d2fe; }
+.sa-scope[data-theme='dark'] [class~='text-indigo-900'] { color: #c7d2fe; }
+.sa-scope[data-theme='dark'] [class~='text-indigo-300'] { color: #a5b4fc; }
+/* indigo-500 is legible on white but only reaches 3.7:1 on the dark card
+   surface, which fails AA for body text. One step lighter clears it. */
+.sa-scope[data-theme='dark'] [class~='text-indigo-500'] { color: #818cf8; }
+.sa-scope[data-theme='dark'] [class~='text-emerald-600'] { color: #6ee7b7; }
+.sa-scope[data-theme='dark'] [class~='text-emerald-700'] { color: #6ee7b7; }
+.sa-scope[data-theme='dark'] [class~='text-emerald-800'] { color: #6ee7b7; }
+.sa-scope[data-theme='dark'] [class~='text-amber-600'] { color: #fcd34d; }
+.sa-scope[data-theme='dark'] [class~='text-amber-700'] { color: #fcd34d; }
+.sa-scope[data-theme='dark'] [class~='text-amber-800'] { color: #fcd34d; }
+.sa-scope[data-theme='dark'] [class~='text-amber-900'] { color: #fcd34d; }
+.sa-scope[data-theme='dark'] [class~='text-red-600'] { color: #fca5a5; }
+.sa-scope[data-theme='dark'] [class~='text-red-700'] { color: #fca5a5; }
+.sa-scope[data-theme='dark'] [class~='text-sky-600'] { color: #7dd3fc; }
+.sa-scope[data-theme='dark'] [class~='text-violet-600'] { color: #c4b5fd; }
+
+/* Borders and separators -------------------------------------------------- */
+
+.sa-scope[data-theme='dark'] [class~='border-slate-100'] { border-color: #1e293b; }
+.sa-scope[data-theme='dark'] [class~='border-slate-200'] { border-color: #253048; }
+.sa-scope[data-theme='dark'] [class~='border-slate-300'] { border-color: #334155; }
+.sa-scope[data-theme='dark'] [class~='divide-slate-100'] > * + * { border-color: #1e293b; }
+.sa-scope[data-theme='dark'] [class~='border-indigo-200'] { border-color: rgba(99, 102, 241, .45); }
+.sa-scope[data-theme='dark'] [class~='border-indigo-300'] { border-color: rgba(99, 102, 241, .6); }
+.sa-scope[data-theme='dark'] [class~='border-emerald-200'] { border-color: rgba(16, 185, 129, .45); }
+.sa-scope[data-theme='dark'] [class~='border-amber-200'] { border-color: rgba(245, 158, 11, .45); }
+.sa-scope[data-theme='dark'] [class~='border-red-200'] { border-color: rgba(239, 68, 68, .45); }
+.sa-scope[data-theme='dark'] [class~='border-red-300'] { border-color: rgba(239, 68, 68, .6); }
+.sa-scope[data-theme='dark'] [class~='border-dashed'] { border-color: #253048; }
+.sa-scope[data-theme='dark'] [class~='border-transparent'] { border-color: transparent; }
+
+.sa-scope[data-theme='dark'] [class~='ring-indigo-100'] { --tw-ring-color: rgba(99, 102, 241, .3); }
+.sa-scope[data-theme='dark'] [class~='focus:border-indigo-500']:focus { border-color: #818cf8; }
+.sa-scope[data-theme='dark'] [class~='focus:ring-indigo-100']:focus { --tw-ring-color: rgba(99, 102, 241, .3); }
+.sa-scope[data-theme='dark'] [class~='focus:border-red-500']:focus { border-color: #f87171; }
+.sa-scope[data-theme='dark'] [class~='focus:ring-red-100']:focus { --tw-ring-color: rgba(239, 68, 68, .3); }
+
+/* Interaction states ------------------------------------------------------ */
+
+.sa-scope[data-theme='dark'] [class~='hover:bg-slate-50']:hover { background-color: #1c2740; }
+.sa-scope[data-theme='dark'] [class~='hover:bg-slate-100']:hover { background-color: #1e293b; }
+.sa-scope[data-theme='dark'] [class~='hover:bg-white']:hover { background-color: #1c2740; }
+.sa-scope[data-theme='dark'] [class~='hover:bg-red-50']:hover { background-color: rgba(239, 68, 68, .2); }
+.sa-scope[data-theme='dark'] [class~='hover:bg-indigo-50/40']:hover { background-color: rgba(99, 102, 241, .12); }
+.sa-scope[data-theme='dark'] [class~='hover:border-indigo-200']:hover { border-color: rgba(99, 102, 241, .5); }
+
+/* Link hovers have to be remapped too. Without these, hovering turns the text
+   back to Tailwind's light-mode indigo — a dark blue on a dark card. */
+.sa-scope[data-theme='dark'] [class~='hover:text-indigo-600']:hover { color: #c7d2fe; }
+.sa-scope[data-theme='dark'] [class~='hover:text-indigo-800']:hover { color: #c7d2fe; }
+
+.sa-scope[data-theme='dark'] [class~='disabled:bg-slate-50']:disabled { background-color: #182135; }
+.sa-scope[data-theme='dark'] [class~='disabled:text-slate-400']:disabled { color: #64748b; }
+
+/* Native controls do not inherit the theme, so set them explicitly. */
+.sa-scope[data-theme='dark'] input:not([type='checkbox']):not([type='radio']),
+.sa-scope[data-theme='dark'] select,
+.sa-scope[data-theme='dark'] textarea {
+  background-color: #16203a;
+  border-color: #334155;
+  color: #e2e8f0;
+}
+.sa-scope[data-theme='dark'] input::placeholder,
+.sa-scope[data-theme='dark'] textarea::placeholder { color: #64748b; }
+.sa-scope[data-theme='dark'] select option { background-color: #131c2e; color: #e2e8f0; }
+.sa-scope[data-theme='dark'] [class~='bg-transparent'] { background-color: transparent; }
+
+/* The sign-in art panel is already dark in both themes, so the generic text
+   overrides above would dim it. Restore its intended values. */
+.sa-scope[data-theme='dark'] .login-art [class~='text-slate-300'] { color: #cbd5e1; }
+.sa-scope[data-theme='dark'] .login-art [class~='text-slate-200'] { color: #e2e8f0; }
+.sa-scope[data-theme='dark'] .login-art [class~='text-indigo-200'] { color: #c7d2fe; }
+.sa-scope[data-theme='dark'] .login-art [class~='text-emerald-300'] { color: #6ee7b7; }
+.sa-scope[data-theme='dark'] .login-art [class~='text-white'] { color: #fff; }
+
+/* Charts draw in SVG, so their colours live here rather than in utilities. */
+.sa-scope[data-theme='dark'] .chart-grid line { stroke: #253048; }
+.sa-scope[data-theme='dark'] .chart-line { stroke: #818cf8; }
+.sa-scope[data-theme='dark'] .chart-dot { fill: #131c2e; stroke: #818cf8; }
+.sa-scope[data-theme='dark'] .chart-label { fill: #7c8aa0; }

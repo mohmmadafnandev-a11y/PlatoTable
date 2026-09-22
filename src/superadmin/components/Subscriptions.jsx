@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { CalendarClock, CreditCard, Play, Pause, Receipt, XCircle } from 'lucide-react'
+import { CalendarClock, CreditCard, ExternalLink, Play, Pause, Receipt, RefreshCw, XCircle } from 'lucide-react'
+import { intervalLabel, resolvePlanPrice } from '../../../shared/plans.js'
 import { supabase } from '../lib/supabase'
 import { logActivity } from '../lib/data'
+import { openBillingPortal, startSubscription, syncFromStripe } from '../lib/stripe-api'
 import { STATUSES, dateTime, daysBetween, money, plainNumber, shortDate } from '../lib/format'
 import { Card, EmptyState, Notice, SectionHead, Spinner, StatCard, StatusBadge, inputClass } from './ui'
 
@@ -16,9 +18,11 @@ function useSubscriptionData() {
     return Promise.all([
       supabase
         .from('subscriptions')
-        .select('*, restaurants(id, name, subdomain, is_active, currency), subscription_plans(id, name)')
+        .select('*, restaurants(id, name, subdomain, is_active, currency), subscription_plans(id, name, interval, interval_count)')
         .order('created_at', { ascending: false }),
-      supabase.from('subscription_plans').select('id, name, price_usd, price_aed, price_pkr, price_gbp, price_sar').order('created_at'),
+      supabase.from('subscription_plans')
+        .select('id, name, interval, interval_count, price_usd, price_aed, price_pkr, price_gbp, price_sar, stripe_price_usd, stripe_price_aed, stripe_price_pkr, stripe_price_gbp, stripe_price_sar')
+        .order('interval').order('name'),
     ]).then(([subscriptionResult, planResult]) => {
       const failure = subscriptionResult.error || planResult.error
       if (failure) setError(failure.message)
@@ -188,8 +192,66 @@ export function SubscriptionDetail({ navigate, id, profile }) {
     const plan = plans.find((item) => item.id === planId)
     if (!plan) return write({ plan_id: null }, 'subscription_plan_cleared')
     const currency = (subscription.currency || 'USD').toUpperCase()
-    const price = plan[`price_${currency.toLowerCase()}`] ?? plan.price_usd
-    return write({ plan_id: plan.id, amount: price, currency }, 'subscription_plan_changed', { plan: plan.name, amount: price, currency })
+    // This used to fall back to the USD price when the plan had no price in the
+    // subscription's currency, which silently recorded the wrong amount. Refuse
+    // instead: a wrong figure here ends up on an invoice.
+    const priced = resolvePlanPrice(plan, currency)
+    if (!priced) {
+      return setFeedback({ tone: 'warning', text: `${plan.name} has no ${currency} price, so it cannot bill this restaurant. Add that price in Plans & pricing first.` })
+    }
+    return write(
+      { plan_id: plan.id, amount: priced.amount, currency: priced.currency },
+      'subscription_plan_changed',
+      { plan: plan.name, interval: `${plan.interval_count || 1} ${plan.interval || 'month'}`, amount: priced.amount, currency: priced.currency },
+    )
+  }
+
+  // Opens hosted Stripe Checkout. The price is resolved on the server from the
+  // plan and this restaurant's currency, so the amount charged never depends on
+  // anything the browser sends.
+  const beginCheckout = async () => {
+    if (!subscription.plan_id) return setFeedback({ tone: 'warning', text: 'Choose a catalogue plan before starting a Stripe subscription.' })
+    setSaving('checkout'); setFeedback(null)
+    try {
+      const result = await startSubscription(restaurantId, subscription.plan_id)
+      setFeedback({ tone: 'success', text: `Opening Stripe Checkout — ${money(result.amount, result.currency)}${result.trialDays ? ` after a ${result.trialDays} day trial` : ''}. Complete it in the Stripe window.` })
+      // `assign` rather than assigning `href`: the lint rule forbids mutating a
+      // value owned outside the component, and this is also the honest intent —
+      // we are leaving, not setting a property.
+      window.location.assign(result.url)
+    } catch (error) {
+      setFeedback({ tone: 'danger', text: error.message })
+      setSaving('')
+    }
+  }
+
+  const openPortal = async () => {
+    setSaving('portal'); setFeedback(null)
+    try {
+      const { url } = await openBillingPortal(restaurantId)
+      window.location.assign(url)
+    } catch (error) {
+      setFeedback({ tone: 'danger', text: error.message })
+      setSaving('')
+    }
+  }
+
+  // Stripe cannot deliver a webhook to a laptop, so in development this is the
+  // only way the subscription actually updates after a test payment. It is also
+  // the recovery path if a live webhook delivery was ever missed.
+  const syncNow = async () => {
+    setSaving('sync'); setFeedback(null)
+    try {
+      const result = await syncFromStripe('subscriptions')
+      const report = result.subscriptions || {}
+      const parts = [`Read ${report.checked ?? 0} subscription${report.checked === 1 ? '' : 's'} from Stripe`, `${report.updated ?? 0} updated`, `${report.transactions ?? 0} payment(s) recorded`]
+      if (report.unmatched?.length) parts.push(`${report.unmatched.length} not matched to a restaurant`)
+      setFeedback({ tone: report.unmatched?.length ? 'warning' : 'success', text: `${parts.join(' · ')}.` })
+      load()
+    } catch (error) {
+      setFeedback({ tone: 'danger', text: error.message })
+    }
+    setSaving('')
   }
 
   const setSuspended = async (suspended) => {
@@ -272,7 +334,15 @@ export function SubscriptionDetail({ navigate, id, profile }) {
       {feedback && <div className="mb-5"><Notice tone={feedback.tone}>{feedback.text}</Notice></div>}
 
       <section className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Recurring amount" value={money(subscription.amount, subscription.currency)} hint={subscription.subscription_plans?.name || 'Custom plan'} icon={CreditCard} tone="text-indigo-600 bg-indigo-50" />
+        <StatCard
+          label="Recurring amount"
+          value={money(subscription.amount, subscription.currency)}
+          hint={subscription.subscription_plans
+            ? `${subscription.subscription_plans.name} · ${intervalLabel(subscription.subscription_plans)}`
+            : 'Custom plan'}
+          icon={CreditCard}
+          tone="text-indigo-600 bg-indigo-50"
+        />
         <StatCard
           label={subscription.status === 'trialing' ? 'Trial ends' : 'Period ends'}
           value={currentEnd ? shortDate(currentEnd) : '—'}
@@ -322,6 +392,44 @@ export function SubscriptionDetail({ navigate, id, profile }) {
         <h2 className="font-semibold text-slate-900">Actions</h2>
         <p className="mt-1 text-sm text-slate-500">Every action here is recorded in the activity log.</p>
 
+        <div className="mt-5 rounded-xl border border-indigo-200 bg-indigo-50 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-800">Stripe billing</h3>
+              <p className="mt-1 text-xs text-slate-600">
+                {subscription.provider_subscription_id
+                  ? 'This restaurant has a live Stripe subscription. Invoices and status arrive by webhook; pull them manually if a delivery was missed.'
+                  : 'No Stripe subscription is attached yet. Checkout uses the plan’s price in this restaurant’s currency, then Stripe keeps the status updated.'}
+              </p>
+            </div>
+            <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">Test mode</span>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              disabled={!!saving || !subscription.plan_id}
+              onClick={beginCheckout}
+              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              <ExternalLink size={16} />{saving === 'checkout' ? 'Opening Stripe…' : subscription.provider_subscription_id ? 'Start another subscription' : 'Start Stripe subscription'}
+            </button>
+            <button
+              disabled={!!saving || !subscription.provider_customer_id}
+              onClick={openPortal}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"
+            >
+              {saving === 'portal' ? 'Opening…' : 'Update payment method'}
+            </button>
+            <button
+              disabled={!!saving}
+              onClick={syncNow}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"
+            >
+              <RefreshCw size={16} className={saving === 'sync' ? 'animate-spin' : ''} />{saving === 'sync' ? 'Syncing…' : 'Sync from Stripe'}
+            </button>
+          </div>
+          {!subscription.plan_id && <p className="mt-3 text-xs font-medium text-amber-700">Choose a plan below first — Checkout charges whatever price that plan carries in {subscription.currency}.</p>}
+        </div>
+
         <div className="mt-6 grid gap-6 lg:grid-cols-3">
           <div className="rounded-xl border border-slate-200 p-4">
             <h3 className="text-sm font-semibold text-slate-800">Extend access</h3>
@@ -337,6 +445,8 @@ export function SubscriptionDetail({ navigate, id, profile }) {
           <div className="rounded-xl border border-slate-200 p-4">
             <h3 className="text-sm font-semibold text-slate-800">Change plan</h3>
             <p className="mt-1 text-xs text-slate-500">Pricing follows the plan and the subscription currency.</p>
+            {/* Only plans that can actually bill this restaurant in its own
+                currency are worth choosing, so the rest are marked. */}
             <select
               disabled={!plans.length || !!saving}
               value={subscription.plan_id || ''}
@@ -344,7 +454,10 @@ export function SubscriptionDetail({ navigate, id, profile }) {
               className={`${inputClass} mt-3 w-full`}
             >
               <option value="">Custom plan (no catalogue plan)</option>
-              {plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}
+              {plans.map((plan) => {
+                const billable = Boolean(resolvePlanPrice(plan, subscription.currency || 'USD'))
+                return <option key={plan.id} value={plan.id}>{plan.name} — {intervalLabel(plan)}{billable ? '' : ` (no ${(subscription.currency || 'USD').toUpperCase()} price)`}</option>
+              })}
             </select>
             {!plans.length && <p className="mt-2 text-xs text-amber-700">No plans exist yet. Create one under Plans & pricing.</p>}
           </div>

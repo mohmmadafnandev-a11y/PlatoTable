@@ -35,32 +35,37 @@ export function AreaChart({ points = [], currency = 'USD', format, height = 200 
           </linearGradient>
         </defs>
 
-        {[0, 0.5, 1].map((ratio) => (
-          <line
-            key={ratio}
-            x1="8"
-            x2={width - 8}
-            y1={paddingTop + innerHeight * ratio}
-            y2={paddingTop + innerHeight * ratio}
-            stroke="#e2e8f0"
-            strokeWidth="1"
-            strokeDasharray={ratio === 1 ? '0' : '4 6'}
-          />
-        ))}
+        {/* Presentation attributes are the light default; the matching classes
+            let the dark theme override stroke and fill from CSS, which wins
+            over a presentation attribute. */}
+        <g className="chart-grid">
+          {[0, 0.5, 1].map((ratio) => (
+            <line
+              key={ratio}
+              x1="8"
+              x2={width - 8}
+              y1={paddingTop + innerHeight * ratio}
+              y2={paddingTop + innerHeight * ratio}
+              stroke="#e2e8f0"
+              strokeWidth="1"
+              strokeDasharray={ratio === 1 ? '0' : '4 6'}
+            />
+          ))}
+        </g>
 
         <path d={area} fill={`url(#${gradientId})`} />
-        <path d={line} fill="none" stroke="#4f46e5" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+        <path d={line} className="chart-line" fill="none" stroke="#4f46e5" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
 
         {values.map((value, index) => (
           value === peak && value > 0
-            ? <circle key={index} cx={xAt(index)} cy={yAt(value)} r="4.5" fill="#fff" stroke="#4f46e5" strokeWidth="2.5" />
+            ? <circle key={index} className="chart-dot" cx={xAt(index)} cy={yAt(value)} r="4.5" fill="#fff" stroke="#4f46e5" strokeWidth="2.5" />
             : null
         ))}
 
         {points.map((point, index) => (
           index % 2 === 0 || index === points.length - 1
             ? (
-              <text key={point.label} x={xAt(index)} y={height - 6} textAnchor="middle" className="fill-slate-400" style={{ fontSize: 11 }}>
+              <text key={point.label} x={xAt(index)} y={height - 6} textAnchor="middle" className="chart-label fill-slate-400" style={{ fontSize: 11 }}>
                 {monthLabel(point.label)}
               </text>
             )

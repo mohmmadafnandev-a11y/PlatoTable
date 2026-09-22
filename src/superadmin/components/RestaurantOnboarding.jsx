@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { COUNTRIES, CURRENCIES, PASSWORD_MIN, currencyForCountry, passwordError, slugError, slugify, suggestPassword } from '../../../shared/slug.js'
+import { intervalLabel, intervalUnit, resolvePlanPrice } from '../../../shared/plans.js'
+import { money } from '../lib/format'
 import { supabase } from '../lib/supabase'
 
 const initialForm = {
@@ -35,7 +37,11 @@ export default function RestaurantOnboarding({ navigate }) {
 
   useEffect(() => {
     if (!supabase) return
-    supabase.from('subscription_plans').select('id, name, trial_days, duration_days, price_pkr, price_usd, price_aed, price_gbp, price_sar').eq('is_active', true).order('created_at')
+    // Only active plans can be chosen, and the interval matters here: a yearly
+    // plan must not be shown as if it billed monthly.
+    supabase.from('subscription_plans')
+      .select('id, name, trial_days, duration_days, interval, interval_count, price_pkr, price_usd, price_aed, price_gbp, price_sar, stripe_price_usd, stripe_price_aed, stripe_price_pkr, stripe_price_gbp, stripe_price_sar')
+      .eq('is_active', true).order('interval').order('name')
       .then(({ data }) => setPlans(data || []))
   }, [])
 
@@ -50,11 +56,13 @@ export default function RestaurantOnboarding({ navigate }) {
   const slugProblem = subdomain ? slugError(subdomain) : ''
   const passwordProblem = form.ownerPassword ? passwordError(form.ownerPassword) : ''
   const selectedPlan = plans.find((plan) => plan.id === form.planId)
-  const planPrice = selectedPlan?.[`price_${form.currency.toLowerCase()}`] ?? null
+  // One resolver shared with the checkout endpoint, so the price shown here is
+  // the price that will be charged rather than a second guess at it.
+  const priced = selectedPlan ? resolvePlanPrice(selectedPlan, form.currency) : null
 
   // A plan that has no price for this currency is refused by the database, so
   // it is surfaced here instead of failing after the owner account is created.
-  const pricingProblem = selectedPlan && (planPrice === null || planPrice === undefined)
+  const pricingProblem = selectedPlan && !priced
     ? `The ${selectedPlan.name} plan has no ${form.currency} price yet. Add one in Plans & pricing, choose another currency, or onboard with no plan.`
     : ''
 
@@ -187,10 +195,10 @@ export default function RestaurantOnboarding({ navigate }) {
         <label className={labelClass}>Plan
           <select value={form.planId} onChange={set('planId')} className={`${inputClass} bg-white`}>
             <option value="">No plan selected</option>
-            {plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}
+            {plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} — {intervalLabel(plan)}</option>)}
           </select>
           {selectedPlan && <small className={pricingProblem ? 'text-amber-700' : 'text-slate-500'}>
-            {pricingProblem || `${form.currency} ${Number(planPrice).toLocaleString()} / ${selectedPlan.duration_days} days`}
+            {pricingProblem || `${money(priced.amount, priced.currency)} per ${intervalUnit(selectedPlan)} · ${selectedPlan.trial_days} day trial · ${selectedPlan.duration_days} day cycle`}
           </small>}
         </label>
 

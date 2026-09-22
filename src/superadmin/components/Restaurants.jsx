@@ -71,7 +71,7 @@ function RestaurantRow({ restaurant, selected, onToggle, onOpen }) {
         <button onClick={onOpen} className="flex items-center gap-3 text-left">
           {restaurant.logo_url
             ? <img src={restaurant.logo_url} alt="" className="h-9 w-9 rounded-lg border border-slate-200 object-cover" />
-            : <span className="grid h-9 w-9 flex-none place-items-center rounded-lg bg-slate-100 text-xs font-bold text-slate-500">{(restaurant.name || 'R').slice(0, 2).toUpperCase()}</span>}
+            : <span className="grid h-9 w-9 flex-none place-items-center rounded-lg bg-slate-100 text-xs font-bold text-slate-600">{(restaurant.name || 'R').slice(0, 2).toUpperCase()}</span>}
           <span>
             <strong className="block font-semibold text-slate-900 hover:text-indigo-600">{restaurant.name}</strong>
             <small className="mt-0.5 block text-xs text-slate-500">/{restaurant.subdomain || '—'}</small>
