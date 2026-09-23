@@ -1,6 +1,7 @@
 import Stripe from 'stripe'
 import { createClient } from '@supabase/supabase-js'
 import { CURRENCIES, PRICE_COLUMNS, fromMinorUnits, stripePriceColumn } from '../../shared/plans.js'
+import { recordPaymentNotifications } from '../_lib/billing-notify.js'
 
 const admin = createClient(process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -34,7 +35,8 @@ async function requireBillingStaff(request) {
  * in the Stripe dashboard makes the local figure a lie. Both are reconciled
  * here, and the differing amounts are reported rather than quietly overwritten.
  */
-async function syncPlans(stripe, staff) {    const products = await stripe.products.list({ limit: 100 })
+async function syncPlans(stripe, staff) {
+  const products = await stripe.products.list({ limit: 100 })
   const byPlanId = new Map()
   for (const product of products.data) {
     const planId = product.metadata?.platotable_plan_id
@@ -118,7 +120,16 @@ async function syncSubscriptions(stripe, staff) {
   const byCustomer = new Map(localSubscriptions.filter((row) => row.provider_customer_id).map((row) => [row.provider_customer_id, row]))
   const bySubscription = new Map(localSubscriptions.filter((row) => row.provider_subscription_id).map((row) => [row.provider_subscription_id, row]))
 
-  const report = { checked: 0, updated: 0, unmatched: [], transactions: 0 }
+  const report = { checked: 0, updated: 0, unmatched: [], transactions: 0, notifications: 0 }
+
+  // Names for the notification text. Read once rather than per invoice, so a
+  // sync of a hundred invoices is not a hundred round trips.
+  const [{ data: restaurantRows }, { data: planRows }] = await Promise.all([
+    admin.from('restaurants').select('id, name'),
+    admin.from('subscription_plans').select('id, name'),
+  ])
+  const restaurantNames = new Map((restaurantRows || []).map((row) => [row.id, row.name]))
+  const planNames = new Map((planRows || []).map((row) => [row.id, row.name]))
 
   for await (const subscription of stripe.subscriptions.list({ limit: 100 })) {
     report.checked += 1
@@ -172,25 +183,44 @@ async function syncSubscriptions(stripe, staff) {
     const local = bySubscription.get(invoice.subscription) || byCustomer.get(typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id)
     if (!local) continue
 
+    const currency = (invoice.currency || 'usd').toUpperCase()
+    const paid = invoice.status === 'paid'
+
     const { error: upsertError } = await admin.from('payment_transactions').upsert({
       restaurant_id: local.restaurant_id,
       subscription_id: local.id,
       provider: 'stripe',
       provider_transaction_id: invoice.payment_intent || invoice.id,
-      amount: fromMinorUnits(invoice.amount_paid || invoice.amount_due || 0, (invoice.currency || 'usd').toUpperCase()),
-      currency: (invoice.currency || 'usd').toUpperCase(),
-      status: invoice.status === 'paid' ? 'succeeded' : invoice.status === 'open' ? 'pending' : 'failed',
+      amount: fromMinorUnits(invoice.amount_paid || invoice.amount_due || 0, currency),
+      currency,
+      status: paid ? 'succeeded' : invoice.status === 'open' ? 'pending' : 'failed',
       invoice_url: invoice.hosted_invoice_url || null,
       created_at: iso(invoice.created) || new Date().toISOString(),
     }, { onConflict: 'provider_transaction_id' })
     if (upsertError) throw upsertError
     report.transactions += 1
+
+    // A sync is often run precisely because a webhook was missed, so the
+    // notifications that webhook would have written are written here too. The
+    // dedupe key is the invoice id — the same one the webhook uses — so a
+    // recovered payment does not announce itself twice.
+    const { written } = await recordPaymentNotifications(admin, {
+      restaurantId: local.restaurant_id,
+      restaurantName: restaurantNames.get(local.restaurant_id),
+      planName: planNames.get(local.plan_id),
+      succeeded: paid,
+      amount: fromMinorUnits(invoice.amount_paid || invoice.amount_due || 0, currency),
+      currency,
+      dedupeKey: `invoice:${invoice.id}`,
+      source: 'sync',
+    })
+    report.notifications += written
   }
 
   await admin.from('activity_logs').insert({
     super_admin_id: staff.id,
     action: 'subscription.synced_from_stripe',
-    details: { checked: report.checked, updated: report.updated, unmatched: report.unmatched, transactions: report.transactions },
+    details: { checked: report.checked, updated: report.updated, unmatched: report.unmatched, transactions: report.transactions, notifications: report.notifications },
   })
   return report
 }

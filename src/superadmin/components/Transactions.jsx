@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { CreditCard, Download, Receipt } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { dateTime, downloadCsv, money, plainNumber } from '../lib/format'
+import { COUNTRIES } from '../../../shared/slug.js'
+import { UpcomingPayments } from './Subscriptions'
 import { Card, EmptyState, Notice, SectionHead, Spinner, StatusBadge, inputClass } from './ui'
 
 const PAGE_SIZE = 25
@@ -14,22 +16,42 @@ export default function Transactions() {
   const [error, setError] = useState('')
   const [status, setStatus] = useState('all')
   const [restaurant, setRestaurant] = useState('all')
+  const [country, setCountry] = useState('all')
+  const [plan, setPlan] = useState('all')
+  // Which plan each subscription is on. A payment names a subscription, not a
+  // plan, so this is what lets the plan filter below be exact on the server
+  // rather than a guess made in the browser.
+  const [planIndex, setPlanIndex] = useState([])
+  const [plans, setPlans] = useState([])
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [minAmount, setMinAmount] = useState('')
   const [expanded, setExpanded] = useState(null)
   const [limit, setLimit] = useState(PAGE_SIZE)
 
+  const planSubscriptionIds = plan === 'all' ? null : planIndex.filter((item) => item.plan_id === plan).map((item) => item.id)
+
   const fetchRows = useCallback(() => {
     if (!supabase) return Promise.resolve()
+    // A plan with no subscribers can never match, so there is nothing to ask for.
+    // Deferred through a promise rather than set inline: state set synchronously
+    // inside the effect that calls this would cause a second render on mount.
+    if (planSubscriptionIds && !planSubscriptionIds.length) {
+      return Promise.resolve().then(() => { setRows([]); setError(''); setLoading(false) })
+    }
     let query = supabase
       .from('payment_transactions')
-      .select('*, restaurants(name, subdomain, country)')
+      // `!inner` so the embedded restaurant can be filtered on: a payment always
+      // belongs to a restaurant, so this drops nothing but lets the country
+      // filter run in the database instead of over a capped page of rows.
+      .select('*, restaurants!inner(name, subdomain, country)')
       .order('created_at', { ascending: false })
       .limit(500)
 
     if (status !== 'all') query = query.eq('status', status)
     if (restaurant !== 'all') query = query.eq('restaurant_id', restaurant)
+    if (country !== 'all') query = query.eq('restaurants.country', country)
+    if (planSubscriptionIds) query = query.in('subscription_id', planSubscriptionIds)
     if (from) query = query.gte('created_at', new Date(from).toISOString())
     if (to) query = query.lte('created_at', new Date(`${to}T23:59:59`).toISOString())
     if (minAmount) query = query.gte('amount', Number(minAmount))
@@ -39,7 +61,7 @@ export default function Transactions() {
       else { setRows(data || []); setError('') }
       setLoading(false)
     })
-  }, [status, restaurant, from, to, minAmount])
+  }, [status, restaurant, country, from, to, minAmount, planSubscriptionIds])
 
   useEffect(() => { fetchRows() }, [fetchRows])
 
@@ -47,6 +69,17 @@ export default function Transactions() {
     if (!supabase) return
     supabase.rpc('super_admin_restaurants').then(({ data }) => {
       if (Array.isArray(data)) setRestaurants(data.map((item) => ({ id: item.id, name: item.name })))
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!supabase) return
+    Promise.all([
+      supabase.from('subscription_plans').select('id, name').order('name'),
+      supabase.from('subscriptions').select('id, plan_id'),
+    ]).then(([planResult, subscriptionResult]) => {
+      setPlans(planResult.data || [])
+      setPlanIndex(subscriptionResult.data || [])
     })
   }, [])
 
@@ -59,6 +92,7 @@ export default function Transactions() {
   const exportCsv = () => downloadCsv(`transactions-${new Date().toISOString().slice(0, 10)}.csv`, rows, [
     { label: 'Date', value: (row) => dateTime(row.created_at) },
     { label: 'Restaurant', value: (row) => row.restaurants?.name || '' },
+    { label: 'Country', value: (row) => row.restaurants?.country || '' },
     { label: 'Amount', value: (row) => row.amount },
     { label: 'Currency', value: (row) => row.currency },
     { label: 'Status', value: (row) => row.status },
@@ -66,7 +100,7 @@ export default function Transactions() {
     { label: 'Provider id', value: (row) => row.provider_transaction_id },
   ])
 
-  const filtered = status !== 'all' || restaurant !== 'all' || from || to || minAmount
+  const filtered = status !== 'all' || restaurant !== 'all' || country !== 'all' || plan !== 'all' || from || to || minAmount
 
   return (
     <>
@@ -98,7 +132,9 @@ export default function Transactions() {
         </Card>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-3">
+      <UpcomingPayments />
+
+      <div className="mb-4 mt-6 flex flex-wrap gap-3">
         <select value={status} onChange={(event) => setStatus(event.target.value)} className={inputClass}>
           <option value="all">All statuses</option>
           {STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}
@@ -107,11 +143,19 @@ export default function Transactions() {
           <option value="all">All restaurants</option>
           {restaurants.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
+        <select value={country} onChange={(event) => setCountry(event.target.value)} className={inputClass}>
+          <option value="all">All countries</option>
+          {COUNTRIES.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}
+        </select>
+        <select value={plan} onChange={(event) => setPlan(event.target.value)} className={inputClass}>
+          <option value="all">All plans</option>
+          {plans.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
         <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} className={inputClass} aria-label="From date" />
         <input type="date" value={to} onChange={(event) => setTo(event.target.value)} className={inputClass} aria-label="To date" />
         <input type="number" min="0" step="0.01" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} placeholder="Minimum amount" className={`${inputClass} w-40`} />
         {filtered && (
-          <button onClick={() => { setStatus('all'); setRestaurant('all'); setFrom(''); setTo(''); setMinAmount('') }} className="h-11 rounded-lg px-3 text-sm font-semibold text-indigo-600">Clear filters</button>
+          <button onClick={() => { setStatus('all'); setRestaurant('all'); setCountry('all'); setPlan('all'); setFrom(''); setTo(''); setMinAmount('') }} className="h-11 rounded-lg px-3 text-sm font-semibold text-indigo-600">Clear filters</button>
         )}
       </div>
 

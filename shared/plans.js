@@ -30,7 +30,14 @@ export const stripePriceColumn = (currency) => `stripe_price_${String(currency).
 export const INTERVALS = [
   { value: 'month', label: 'Monthly', every: 'month' },
   { value: 'year', label: 'Yearly', every: 'year' },
+  // A plan for an arbitrary number of days — "90 days for PKR 5,000". Stripe
+  // bills this as `interval: 'day'` with an interval_count, which is why the
+  // interval is a real option here rather than a special case in the form.
+  { value: 'day', label: 'Custom (every N days)', every: 'day' },
 ]
+
+/** The interval a one-off plan created during onboarding uses. */
+export const CUSTOM_INTERVAL = 'day'
 
 // Mirrors the NOT NULL columns on `subscription_plans`. Changing either list
 // without the matching migration turns a clear form error into a 500.
@@ -40,7 +47,9 @@ export const OPTIONAL_PRICE_CURRENCIES = ['GBP', 'SAR']
 export const PLAN_NAME_MIN = 2
 export const PLAN_NAME_MAX = 60
 export const TRIAL_DAYS_MAX = 365
-export const INTERVAL_COUNT_MAX = 36
+// Matches the widened check constraint: a day interval of up to 365 is what
+// Stripe accepts, so a 90 day custom plan is expressible.
+export const INTERVAL_COUNT_MAX = 365
 
 // Stripe takes amounts in the currency's smallest unit. Most currencies have two
 // decimal places, but a handful (JPY, KRW, VND, …) have none, and multiplying
@@ -72,12 +81,22 @@ export const priceForCurrency = (plan, currency) => {
 export function intervalLabel(planOrInterval, count = 1) {
   const interval = typeof planOrInterval === 'string' ? planOrInterval : planOrInterval?.interval
   const intervalCount = typeof planOrInterval === 'string' ? count : planOrInterval?.interval_count ?? 1
+  if (interval === 'day') return intervalCount === 1 ? 'Daily' : `Every ${intervalCount} days`
   if (interval === 'year') return intervalCount === 1 ? 'Yearly' : `Every ${intervalCount} years`
   return intervalCount === 1 ? 'Monthly' : `Every ${intervalCount} months`
 }
 
-/** "Monthly" → "month", for the `/mo` and `/yr` suffix in a price line. */
-export const intervalUnit = (planOrInterval) => (typeof planOrInterval === 'string' ? planOrInterval : planOrInterval?.interval) === 'year' ? 'yr' : 'mo'
+/**
+ * The suffix on a price line — `PKR 2,000/mo`, `GBP 15/yr`, `PKR 5,000/90 days`.
+ * A day interval spells the count out, because "/day" against a 90 day plan
+ * would read as a daily charge.
+ */
+export const intervalUnit = (planOrInterval, count = 1) => {
+  const interval = typeof planOrInterval === 'string' ? planOrInterval : planOrInterval?.interval
+  const intervalCount = typeof planOrInterval === 'string' ? count : planOrInterval?.interval_count ?? 1
+  if (interval === 'day') return intervalCount === 1 ? 'day' : `${intervalCount} days`
+  return interval === 'year' ? 'yr' : 'mo'
+}
 
 /**
  * Mirrors the `subscription_plans_sync_duration` trigger in migration 005. The
@@ -86,6 +105,7 @@ export const intervalUnit = (planOrInterval) => (typeof planOrInterval === 'stri
  */
 export function planDurationDays(interval, intervalCount = 1) {
   const count = Number(intervalCount) || 1
+  if (interval === 'day') return count
   return interval === 'year' ? 365 * count : 30 * count
 }
 
@@ -101,13 +121,22 @@ export function featureList(features) {
  * written for the person editing it. The server calls this too, so a malformed
  * request can never reach Stripe.
  */
+/**
+ * A name for a bespoke plan that a person can recognise in a list. It is not a
+ * catalogue plan, so it never appears in the onboarding dropdown — but it does
+ * appear on invoices and in the subscriber list, where "DayNight — 90 days"
+ * reads far better than a UUID.
+ */
+export const customPlanName = (restaurantName, days, suffix = 0) =>
+  `${String(restaurantName || 'Restaurant').trim()} — ${days} day${Number(days) === 1 ? '' : 's'}${suffix ? ` (${suffix})` : ''}`
+
 export function planError(plan = {}) {
   const name = String(plan.name ?? '').trim()
   if (!name) return 'Enter a plan name.'
   if (name.length < PLAN_NAME_MIN || name.length > PLAN_NAME_MAX) return `Use between ${PLAN_NAME_MIN} and ${PLAN_NAME_MAX} characters for the plan name.`
 
   const interval = String(plan.interval ?? 'month')
-  if (!['month', 'year'].includes(interval)) return 'Choose a monthly or yearly billing period.'
+  if (!['day', 'month', 'year'].includes(interval)) return 'Choose a monthly, yearly, or custom-day billing period.'
 
   const count = Number(plan.interval_count ?? 1)
   if (!Number.isInteger(count) || count < 1 || count > INTERVAL_COUNT_MAX) {
@@ -117,6 +146,24 @@ export function planError(plan = {}) {
   const trial = Number(plan.trial_days ?? 0)
   if (!Number.isInteger(trial) || trial < 0 || trial > TRIAL_DAYS_MAX) {
     return `Trial length must be a whole number of days between 0 and ${TRIAL_DAYS_MAX}.`
+  }
+
+  // A bespoke plan from onboarding is priced in the currency the restaurant
+  // actually trades in, so its other currencies are legitimately 0. Demanding
+  // all three would force the operator to invent two prices that will never be
+  // charged — and 0 is not a free plan, because `resolvePlanPrice` treats it as
+  // "not sold in this currency" and checkout refuses rather than charging zero.
+  const custom = plan.is_custom === true || plan.is_custom === 'true'
+  if (custom) {
+    for (const currency of CURRENCIES) {
+      const raw = plan[PRICE_COLUMNS[currency]]
+      if (raw === null || raw === undefined || raw === '') continue
+      const amount = Number(raw)
+      if (!Number.isFinite(amount) || amount < 0) return `Enter a valid ${currency} price, or leave it blank.`
+    }
+    const priced = CURRENCIES.filter((currency) => Number(plan[PRICE_COLUMNS[currency]] || 0) > 0)
+    if (!priced.length) return 'Enter a price in the currency this restaurant is billed in.'
+    return ''
   }
 
   // USD, AED and PKR are NOT NULL columns on `subscription_plans`, so a plan
@@ -146,7 +193,37 @@ export function planError(plan = {}) {
 }
 
 /**
- * The price a restaurant should be billed, given the currency its account trades
+ * Validates the bespoke plan an operator sizes during onboarding — "90 days for
+ * PKR 5,000, with a 10 day trial, or without one".
+ *
+ * Shared with the server so a value the form accepts can never be refused for a
+ * different reason, and so the form can refuse a bad number before an owner
+ * account has been created for a restaurant that cannot then be billed.
+ */
+export function customPlanError(plan = {}) {
+  const days = Number(plan.days)
+  if (!Number.isInteger(days) || days < 1 || days > INTERVAL_COUNT_MAX) {
+    return `Billing period must be a whole number of days between 1 and ${INTERVAL_COUNT_MAX}.`
+  }
+
+  const price = Number(plan.price)
+  if (!Number.isFinite(price) || price <= 0) return 'Enter the amount to charge each billing period.'
+
+  const trial = Number(plan.trialDays ?? 0)
+  if (!Number.isInteger(trial) || trial < 0 || trial > TRIAL_DAYS_MAX) {
+    return trial > 0
+      ? `Trial length must be a whole number of days between 0 and ${TRIAL_DAYS_MAX}, or turn the trial off.`
+      : 'Trial length must be a whole number of days.'
+  }
+
+  if (!CURRENCIES.includes(String(plan.currency || '').toUpperCase())) {
+    return 'Choose the currency this restaurant is billed in.'
+  }
+
+  return ''
+}
+
+/** The price a restaurant should be billed, given the currency its account trades
  * in. Returns null when the plan has no price in that currency, which the
  * onboarding form surfaces instead of letting the database refuse the row.
  */

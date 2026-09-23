@@ -9,6 +9,7 @@ import './theme.css'
 import ActivityLogs from './components/ActivityLogs'
 import Analytics from './components/Analytics'
 import CustomUrls from './components/CustomUrls'
+import Notifications from './components/Notifications'
 import Dashboard from './components/Dashboard'
 import Plans from './components/Plans'
 import { RestaurantDetail, Restaurants } from './components/Restaurants'
@@ -17,7 +18,6 @@ import SystemSettings from './components/Settings'
 import { SubscriptionDetail, Subscriptions } from './components/Subscriptions'
 import Team from './components/Team'
 import Transactions from './components/Transactions'
-import { StatusBadge } from './components/ui'
 import { useRestaurants } from './lib/data'
 import { useTheme } from '../lib/theme'
 import { useSidebar } from './lib/layout'
@@ -195,7 +195,6 @@ function Shell({ profile, theme, toggleTheme }) {
 }
 
 
-function Notifications({ navigate }) { const [notifications, setNotifications] = useState([]); const [loading, setLoading] = useState(true); const [type, setType] = useState('all'); const reload = () => supabase.from('system_notifications').select('*, restaurants(name)').order('created_at', { ascending: false }).then(({ data }) => { setNotifications(data || []); setLoading(false) }); useEffect(() => { if (supabase) reload() }, []); const visible = notifications.filter((item) => type === 'all' || item.type === type); return <><div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold tracking-[.16em] text-indigo-600">RESTAURANT COMMUNICATION</p><h1 className="mt-2 text-3xl font-semibold">Notifications</h1><p className="mt-2 text-sm text-slate-500">Send operational updates and review delivery history.</p></div><button onClick={() => navigate('/notifications/send')} className="rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white">+ Send notification</button></div><div className="mb-4 flex gap-2 overflow-x-auto">{['all', 'info', 'success', 'warning', 'critical'].map((item) => <button key={item} onClick={() => setType(item)} className={`rounded-lg px-3 py-2 text-sm font-semibold capitalize ${type === item ? 'bg-indigo-600 text-white' : 'border border-slate-200 bg-white text-slate-600'}`}>{item}</button>)}</div><section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">{loading ? <p className="p-8 text-sm text-slate-500">Loading notifications…</p> : <div className="overflow-x-auto"><table className="min-w-175 w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="p-4">Date</th><th className="p-4">Notification</th><th className="p-4">Type</th><th className="p-4">Audience</th><th className="p-4">Color</th></tr></thead><tbody>{visible.map((item) => <tr key={item.id} className="border-t border-slate-100"><td className="p-4 text-slate-500">{new Date(item.created_at).toLocaleDateString()}</td><td className="p-4"><strong className="block text-slate-800">{item.title}</strong><span className="mt-1 block max-w-md truncate text-xs text-slate-500">{item.message}</span></td><td className="p-4"><StatusBadge status={item.type === 'success' ? 'active' : item.type === 'critical' ? 'suspended' : item.type} /></td><td className="p-4 text-slate-600">{item.restaurants?.name || 'All restaurants'}</td><td className="p-4 capitalize text-slate-600">{item.background_color}</td></tr>)}{!visible.length && <tr><td colSpan="5" className="p-9 text-center text-slate-500">No notifications found.</td></tr>}</tbody></table></div>}</section></> }
 function SendNotification({ navigate }) {
   const { restaurants, loading: restaurantsLoading, error: restaurantsError } = useRestaurants()
   const [title, setTitle] = useState(''); const [message, setMessage] = useState(''); const [type, setType] = useState('info'); const [color, setColor] = useState('white'); const [audience, setAudience] = useState('all'); const [restaurantId, setRestaurantId] = useState(''); const [selectedRestaurantIds, setSelectedRestaurantIds] = useState([]); const [sending, setSending] = useState(false); const [feedback, setFeedback] = useState('')

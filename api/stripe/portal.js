@@ -54,7 +54,7 @@ export default async function handler(request, response) {
 
     const { data: subscription } = await admin
       .from('subscriptions')
-      .select('id, provider_customer_id, restaurant_id')
+      .select('id, provider_customer_id, restaurant_id, restaurants(subdomain)')
       .eq('restaurant_id', restaurantId)
       .maybeSingle()
 
@@ -63,9 +63,19 @@ export default async function handler(request, response) {
     }
 
     const base = (process.env.VITE_CANONICAL_BASE_URL || process.env.VITE_APP_URL || '').replace(/\/+$/, '')
+    // Return them where they started. A restaurant admin lives under their own
+    // slug; sending them to the platform's subscription list would show them a
+    // screen that is not theirs.
+    const subdomain = subscription.restaurants?.subdomain
+    const returnPath = who.isStaff || !subdomain ? '/admin/subscriptions' : `/admin/${subdomain}/subscription`
+    // Stripe requires an absolute return URL, so a deployment with no configured
+    // base has to say so rather than fail with a puzzling portal error.
+    if (!base) {
+      return response.status(503).json({ error: 'This deployment has no public base URL. Set VITE_CANONICAL_BASE_URL so Stripe knows where to return the customer.' })
+    }
     const session = await stripe.billingPortal.sessions.create({
       customer: subscription.provider_customer_id,
-      return_url: base ? `${base}/admin/subscriptions` : undefined,
+      return_url: `${base}${returnPath}`,
     })
 
     await admin.from('activity_logs').insert({

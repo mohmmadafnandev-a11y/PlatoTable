@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CalendarClock, CreditCard, ExternalLink, Play, Pause, Receipt, RefreshCw, XCircle } from 'lucide-react'
-import { intervalLabel, resolvePlanPrice } from '../../../shared/plans.js'
+import { intervalLabel, planDurationDays, resolvePlanPrice } from '../../../shared/plans.js'
 import { supabase } from '../lib/supabase'
 import { logActivity } from '../lib/data'
-import { openBillingPortal, startSubscription, syncFromStripe } from '../lib/stripe-api'
+import { openBillingPortal, runBillingSweep, startSubscription, syncFromStripe } from '../lib/stripe-api'
 import { STATUSES, dateTime, daysBetween, money, plainNumber, shortDate } from '../lib/format'
 import { Card, EmptyState, Notice, SectionHead, Spinner, StatCard, StatusBadge, inputClass } from './ui'
 
@@ -39,6 +39,155 @@ function useSubscriptionData() {
   return { subscriptions, plans, loading, error, load }
 }
 
+/**
+ * Every charge due inside the window, soonest first.
+ *
+ * Read from the database rather than from Stripe so the screen still answers
+ * when Stripe is unreachable, and so a trial that has never touched Stripe —
+ * every restaurant before it adds a card — appears like any other.
+ */
+function useUpcomingPayments(days = 30) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  // `loading` is only ever cleared here, never set: it starts true, and a reload
+  // leaves the previous rows on screen instead of blanking the table. Clearing
+  // it inside the promise also keeps the call out of the effect body, where a
+  // synchronous setState would cause a second render on every mount.
+  const load = useCallback(() => {
+    if (!supabase) return Promise.resolve()
+    return supabase.rpc('super_admin_upcoming_payments', { p_days: days }).then(({ data: result, error: requestError }) => {
+      if (requestError) setError(requestError.message)
+      else { setData(result); setError('') }
+      setLoading(false)
+    })
+  }, [days])
+
+  useEffect(() => { load() }, [load])
+  return {
+    upcoming: data?.upcoming || [],
+    totals: data?.totals || [],
+    windowDays: data?.window_days ?? days,
+    loading,
+    error,
+    reload: load,
+  }
+}
+
+// Exported so the Transactions screen shows the same renewals calendar rather
+// than a second, subtly different one.
+export function UpcomingPayments() {
+  const { upcoming, totals, windowDays, loading, error, reload } = useUpcomingPayments(30)
+  const [running, setRunning] = useState('')
+  const [feedback, setFeedback] = useState(null)
+
+  // The same job the daily cron runs. Offered here so the trial warning and the
+  // grace notices can be seen working without waiting for tomorrow morning.
+  const runSweep = async (dryRun) => {
+    setRunning(dryRun ? 'dry' : 'live')
+    setFeedback(null)
+    try {
+      const result = await runBillingSweep(dryRun)
+      const report = result.result || {}
+      setFeedback({
+        tone: 'success',
+        text: `${dryRun ? 'Dry run' : 'Sweep'} — ${report.due_soon ?? 0} due soon · ${report.grace_warnings ?? 0} in grace · ${report.payment_failures ?? 0} failed payment(s) · ${report.suspended ?? 0} suspended.`,
+      })
+      if (!dryRun) reload()
+    } catch (sweepError) {
+      setFeedback({ tone: 'danger', text: sweepError.message })
+    }
+    setRunning('')
+  }
+
+  return (
+    <Card className="mt-6 overflow-hidden p-0">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 p-5">
+        <div>
+          <h2 className="font-semibold text-slate-900">Upcoming payments</h2>
+          <p className="mt-1 text-sm text-slate-500">Trials ending and renewals due in the next {windowDays} days, soonest first.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            disabled={Boolean(running)}
+            onClick={() => runSweep(true)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50"
+          >
+            {running === 'dry' ? 'Checking…' : 'Dry run sweep'}
+          </button>
+          <button
+            disabled={Boolean(running)}
+            onClick={() => runSweep(false)}
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={running === 'live' ? 'animate-spin' : ''} />{running === 'live' ? 'Running…' : 'Run billing sweep'}
+          </button>
+        </div>
+      </div>
+
+      {feedback && <div className="border-b border-slate-100 p-4"><Notice tone={feedback.tone}>{feedback.text}</Notice></div>}
+      {error && <div className="border-b border-slate-100 p-4"><Notice tone="danger">{error}</Notice></div>}
+
+      {totals.length > 0 && (
+        <div className="flex flex-wrap gap-3 border-b border-slate-100 px-5 py-4">
+          {totals.map((total) => (
+            <span key={total.currency} className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700">
+              {total.count} due · {money(total.amount, total.currency)}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {loading && !upcoming.length
+        ? <Spinner label="Loading renewals" />
+        : upcoming.length
+          ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="p-4 font-semibold">Restaurant</th>
+                    <th className="p-4 font-semibold">Plan</th>
+                    <th className="p-4 font-semibold">What happens</th>
+                    <th className="p-4 font-semibold">Date</th>
+                    <th className="p-4 font-semibold">In</th>
+                    <th className="p-4 font-semibold">Amount</th>
+                    <th className="p-4 font-semibold">Card on file</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {upcoming.map((row) => (
+                    <tr key={row.subscription_id} className="border-t border-slate-100 transition hover:bg-indigo-50/40">
+                      <td className="p-4">
+                        <strong className="block font-semibold text-slate-900">{row.restaurant_name}</strong>
+                        <small className="mt-1 block text-xs text-slate-400">/{row.subdomain || '—'} · {row.country || '—'}</small>
+                      </td>
+                      <td className="p-4 text-slate-600">{row.plan_name || 'Custom plan'}</td>
+                      <td className="p-4">
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${row.kind === 'trial_ends' ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-700'}`}>
+                          {row.kind === 'trial_ends' ? 'Trial ends' : 'Renews'}
+                        </span>
+                      </td>
+                      <td className="p-4 text-slate-600">{shortDate(row.due_at)}</td>
+                      <td className="p-4">
+                        <span className={row.days_until <= 3 ? 'font-semibold text-amber-700' : 'text-slate-600'}>
+                          {row.days_until === 0 ? 'today' : `${row.days_until}d`}
+                        </span>
+                      </td>
+                      <td className="p-4 text-slate-600">{money(row.amount, row.currency)}</td>
+                      <td className="p-4 text-slate-600">{row.has_stripe ? 'Yes' : <span className="text-amber-700">Not yet</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+          : <EmptyState icon={CalendarClock} title="Nothing due in this window" description="No trial ends or renewals fall inside the next 30 days." />}
+    </Card>
+  )
+}
+
 export function Subscriptions({ navigate }) {
   const { subscriptions, loading, error, load } = useSubscriptionData()
   const [filter, setFilter] = useState('all')
@@ -66,6 +215,8 @@ export function Subscriptions({ navigate }) {
           </button>
         ))}
       </section>
+
+      <UpcomingPayments />
 
       <div className="mt-6 flex gap-2 overflow-x-auto">
         <button onClick={() => setFilter('all')} className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold ${filter === 'all' ? 'bg-indigo-600 text-white' : 'border border-slate-200 bg-white text-slate-600'}`}>All ({subscriptions.length})</button>
@@ -277,11 +428,14 @@ export function SubscriptionDetail({ navigate, id, profile }) {
   // last_payment_status alone would report money that appears nowhere in the
   // ledger or the revenue totals.
   const markPaid = async () => {
-    if (!window.confirm(`Record an offline payment of ${money(subscription.amount, subscription.currency)} and extend one month?`)) return
+    // One period, as the plan defines it. This used to add exactly one month,
+    // which silently gave a yearly plan a monthly period, so the next invoice
+    // fell due eleven months early.
+    const periodDays = planDurationDays(subscription.subscription_plans?.interval, subscription.subscription_plans?.interval_count)
+    if (!window.confirm(`Record an offline payment of ${money(subscription.amount, subscription.currency)} and extend the period by ${periodDays} days?`)) return
     setSaving('mark_paid')
     const periodStart = new Date()
-    const periodEnd = new Date(periodStart)
-    periodEnd.setMonth(periodEnd.getMonth() + 1)
+    const periodEnd = new Date(periodStart.getTime() + periodDays * 86400000)
 
     const { error: paymentError } = await supabase.from('payment_transactions').insert({
       restaurant_id: restaurantId,
@@ -298,7 +452,11 @@ export function SubscriptionDetail({ navigate, id, profile }) {
       .from('subscriptions')
       .update({
         status: 'active',
-        last_payment_status: 'succeeded',
+        // `paid`, not `succeeded`. The column is constrained to paid/failed, so
+        // `succeeded` was rejected by the database and the whole update failed —
+        // which is why this button reported a check-constraint violation with
+        // the payment already recorded in the ledger.
+        last_payment_status: 'paid',
         current_period_start: periodStart.toISOString(),
         current_period_end: periodEnd.toISOString(),
         updated_at: new Date().toISOString(),
@@ -306,8 +464,8 @@ export function SubscriptionDetail({ navigate, id, profile }) {
       .eq('id', subscription.id)
     setSaving('')
     if (updateError) return setFeedback({ tone: 'danger', text: updateError.message })
-    await logActivity({ superAdminId: profile?.id, restaurantId, action: 'subscription_paid_manually', details: { amount: subscription.amount } })
-    setFeedback({ tone: 'success', text: 'Offline payment recorded and the period extended by one month.' })
+    await logActivity({ superAdminId: profile?.id, restaurantId, action: 'subscription_paid_manually', details: { amount: subscription.amount, days: periodDays } })
+    setFeedback({ tone: 'success', text: `Offline payment recorded and the period extended by ${periodDays} days.` })
     load()
   }
 
@@ -432,8 +590,15 @@ export function SubscriptionDetail({ navigate, id, profile }) {
 
         <div className="mt-6 grid gap-6 lg:grid-cols-3">
           <div className="rounded-xl border border-slate-200 p-4">
-            <h3 className="text-sm font-semibold text-slate-800">Extend access</h3>
-            <p className="mt-1 text-xs text-slate-500">Adds days to the {subscription.status === 'trialing' ? 'trial' : 'billing period'}.</p>
+            <h3 className="text-sm font-semibold text-slate-800">Extend the billing period</h3>
+            {/* Two different things are easily confused, and the difference
+                decides whether a restaurant keeps serving menus. Saying so here
+                is cheaper than explaining it on a support call. */}
+            <p className="mt-1 text-xs text-slate-500">
+              Pushes the next charge date out by these days — a goodwill credit, not a payment.
+              {' '}Separately, the platform's grace period already keeps a restaurant online automatically
+              after its date passes, before anything suspends it.
+            </p>
             <div className="mt-3 flex gap-2">
               <input type="number" min="1" max="365" value={days} onChange={(event) => setDays(event.target.value)} className={`${inputClass} w-24`} />
               <button disabled={saving === 'subscription_extended'} onClick={extend} className="flex-1 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 disabled:opacity-60">
@@ -464,7 +629,11 @@ export function SubscriptionDetail({ navigate, id, profile }) {
 
           <div className="rounded-xl border border-slate-200 p-4">
             <h3 className="text-sm font-semibold text-slate-800">Record an offline payment</h3>
-            <p className="mt-1 text-xs text-slate-500">Writes a real transaction and extends the period by one month.</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Writes a real transaction and starts a fresh {subscription.subscription_plans
+                ? intervalLabel(subscription.subscription_plans).toLowerCase()
+                : '30 day'} period from today. Marking it paid alone would record money that appears in no ledger.
+            </p>
             <button disabled={saving === 'mark_paid'} onClick={markPaid} className="mt-3 w-full rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-semibold text-emerald-700 disabled:opacity-60">
               {saving === 'mark_paid' ? 'Recording…' : 'Mark as paid'}
             </button>

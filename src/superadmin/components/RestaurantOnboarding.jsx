@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { COUNTRIES, CURRENCIES, PASSWORD_MIN, currencyForCountry, passwordError, slugError, slugify, suggestPassword } from '../../../shared/slug.js'
-import { intervalLabel, intervalUnit, resolvePlanPrice } from '../../../shared/plans.js'
+import { customPlanError, intervalLabel, intervalUnit, resolvePlanPrice } from '../../../shared/plans.js'
 import { money } from '../lib/format'
 import { supabase } from '../lib/supabase'
 
@@ -26,6 +26,12 @@ export default function RestaurantOnboarding({ navigate }) {
   const [form, setForm] = useState(initialForm)
   const [plans, setPlans] = useState([])
   const [mode, setMode] = useState('trial')
+  // A restaurant can be put on a catalogue plan, on a bespoke plan sized here, or
+  // on nothing yet. `custom` holds the bespoke values so switching back and forth
+  // between the two modes does not lose what was typed.
+  const [planMode, setPlanMode] = useState('catalogue')
+  const [custom, setCustom] = useState({ days: '30', price: '', trialOn: true, trialDays: '7' })
+  const setCustomField = (field) => (event) => setCustom((current) => ({ ...current, [field]: event.target.value }))
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState('')
   const [slugEdited, setSlugEdited] = useState(false)
@@ -56,6 +62,14 @@ export default function RestaurantOnboarding({ navigate }) {
   const slugProblem = subdomain ? slugError(subdomain) : ''
   const passwordProblem = form.ownerPassword ? passwordError(form.ownerPassword) : ''
   const selectedPlan = plans.find((plan) => plan.id === form.planId)
+  // Validated with the same function the server uses, so a bespoke plan the form
+  // accepts can never be refused after the owner's account already exists.
+  const customProblem = planMode === 'custom'
+    ? customPlanError({ days: Number(custom.days), price: Number(custom.price), trialDays: custom.trialOn ? Number(custom.trialDays) : 0, currency: form.currency })
+    : ''
+  const customTotal = Number(custom.price) > 0 && Number(custom.days) > 0
+    ? `Charges ${custom.price} ${form.currency} every ${custom.days} day${Number(custom.days) === 1 ? '' : 's'}${custom.trialOn ? `, after a ${custom.trialDays} day free trial` : ', with no free trial'}.`
+    : ''
   // One resolver shared with the checkout endpoint, so the price shown here is
   // the price that will be charged rather than a second guess at it.
   const priced = selectedPlan ? resolvePlanPrice(selectedPlan, form.currency) : null
@@ -68,8 +82,8 @@ export default function RestaurantOnboarding({ navigate }) {
 
   const canSubmit = useMemo(() => Boolean(
     form.name.trim() && subdomain && !slugProblem && form.ownerName.trim() && form.ownerEmail.trim()
-    && form.ownerPassword && !passwordProblem && !pricingProblem && !saving
-  ), [form, subdomain, slugProblem, passwordProblem, pricingProblem, saving])
+    && form.ownerPassword && !passwordProblem && !pricingProblem && !customProblem && !saving
+  ), [form, subdomain, slugProblem, passwordProblem, pricingProblem, customProblem, saving])
 
   const submit = async (event) => {
     event.preventDefault()
@@ -78,6 +92,7 @@ export default function RestaurantOnboarding({ navigate }) {
     if (slugProblem) return setFeedback(slugProblem)
     if (passwordProblem) return setFeedback(passwordProblem)
     if (pricingProblem) return setFeedback(pricingProblem)
+    if (customProblem) return setFeedback(customProblem)
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) { setSaving(false); return setFeedback('Your session expired. Please sign in again.') }
@@ -85,8 +100,17 @@ export default function RestaurantOnboarding({ navigate }) {
       ...form,
       subdomain,
       customDomain: form.customDomain.trim().toLowerCase(),
-      planId: form.planId || null,
+      planId: planMode === 'catalogue' ? (form.planId || null) : null,
       trialDays: mode === 'trial' ? Number(form.trialDays) : 0,
+      // Sent instead of a catalogue plan id. The server creates the plan in
+      // Stripe and hands its id to the onboarding transaction, so a restaurant
+      // can be invoiced for it immediately.
+      customPlan: planMode === 'custom' ? {
+        days: Number(custom.days),
+        price: Number(custom.price),
+        trialDays: custom.trialOn ? Number(custom.trialDays) : 0,
+        currency: form.currency,
+      } : null,
     }
     try {
       const response = await fetch('/api/restaurants/onboard', {
@@ -192,12 +216,40 @@ export default function RestaurantOnboarding({ navigate }) {
           <small className="text-slate-500">Defaults to the country’s currency. Change it if you bill in another.</small>
         </label>
 
-        <label className={labelClass}>Plan
-          <select value={form.planId} onChange={set('planId')} className={`${inputClass} bg-white`}>
-            <option value="">No plan selected</option>
+        <div className="sm:col-span-2">
+          <p className="mb-2 text-sm font-medium text-slate-700">Billing plan</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setPlanMode('catalogue')} className={`rounded-lg px-3 py-2 text-sm font-semibold ${planMode === 'catalogue' ? 'bg-indigo-600 text-white' : 'border border-slate-200 text-slate-600'}`}>Choose from catalogue</button>
+            <button type="button" onClick={() => setPlanMode('custom')} className={`rounded-lg px-3 py-2 text-sm font-semibold ${planMode === 'custom' ? 'bg-indigo-600 text-white' : 'border border-slate-200 text-slate-600'}`}>Custom plan</button>
+          </div>
+        </div>
+
+        <label className={labelClass}>{planMode === 'custom' ? 'Catalogue plan (not used)' : 'Plan'}
+          <select value={form.planId} onChange={set('planId')} disabled={planMode === 'custom'} className={`${inputClass} bg-white disabled:bg-slate-100 disabled:text-slate-400`}>
+            <option value="">{planMode === 'custom' ? 'A custom plan is being created instead' : 'No plan selected'}</option>
             {plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} — {intervalLabel(plan)}</option>)}
           </select>
-          {selectedPlan && <small className={pricingProblem ? 'text-amber-700' : 'text-slate-500'}>
+          {planMode === 'custom' && <span className="mt-2 grid gap-4 rounded-lg border border-indigo-100 bg-indigo-50/40 p-4 sm:grid-cols-2">
+            <span className="grid gap-2 text-sm font-medium text-slate-700">Billing period (days)
+              <input required type="number" min="1" max="365" value={custom.days} onChange={setCustomField('days')} className={inputClass} />
+              <small className="font-normal text-slate-500">What one payment covers — 30 for a month, 365 for a year.</small>
+            </span>
+            <span className="grid gap-2 text-sm font-medium text-slate-700">Price per period ({form.currency})
+              <input required type="number" min="1" step="0.01" value={custom.price} onChange={setCustomField('price')} placeholder="5000" className={inputClass} />
+              <small className="font-normal text-slate-500">Saved as a hidden plan and created in Stripe test mode at this price.</small>
+            </span>
+            <span className="grid gap-2 text-sm font-medium text-slate-700 sm:col-span-2">Free trial
+              <span className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => setCustom((current) => ({ ...current, trialOn: true }))} className={`rounded-lg px-3 py-2 text-sm font-semibold ${custom.trialOn ? 'bg-indigo-600 text-white' : 'border border-slate-200 bg-white text-slate-600'}`}>With a free trial</button>
+                <button type="button" onClick={() => setCustom((current) => ({ ...current, trialOn: false }))} className={`rounded-lg px-3 py-2 text-sm font-semibold ${custom.trialOn ? 'border border-slate-200 bg-white text-slate-600' : 'bg-indigo-600 text-white'}`}>No trial</button>
+              </span>
+            </span>
+            {custom.trialOn && <span className="grid gap-2 text-sm font-medium text-slate-700">Free trial days
+              <input required type="number" min="1" max="365" value={custom.trialDays} onChange={setCustomField('trialDays')} className={inputClass} />
+            </span>}
+            <p className={`sm:col-span-2 text-sm ${customProblem ? 'text-red-600' : 'text-slate-600'}`}>{customProblem || customTotal || 'Enter a billing period and a price.'}</p>
+          </span>}
+          {planMode === 'catalogue' && selectedPlan && <small className={pricingProblem ? 'text-amber-700' : 'text-slate-500'}>
             {pricingProblem || `${money(priced.amount, priced.currency)} per ${intervalUnit(selectedPlan)} · ${selectedPlan.trial_days} day trial · ${selectedPlan.duration_days} day cycle`}
           </small>}
         </label>

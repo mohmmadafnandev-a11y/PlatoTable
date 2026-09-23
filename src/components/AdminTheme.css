@@ -212,6 +212,13 @@
 [data-theme='dark'] .subscription-facts small { color: var(--ad-accent); }
 [data-theme='dark'] .cancel-note { background: #3d3420; color: #f0d59a; }
 
+[data-theme='dark'] .billing-actions { border-color: var(--ad-border); background: var(--ad-surface); }
+[data-theme='dark'] .billing-actions-head h2 { color: var(--ad-text); }
+[data-theme='dark'] .billing-actions-head p { color: var(--ad-muted); }
+[data-theme='dark'] .billing-quote { background: var(--ad-raised); color: var(--ad-text); }
+[data-theme='dark'] .billing-quote strong { color: var(--ad-accent); }
+[data-theme='dark'] .notification-cta { color: var(--ad-accent); }
+
 [data-theme='dark'] .billing-table { border-color: var(--ad-border); background: var(--ad-surface); }
 [data-theme='dark'] .billing-table article { border-bottom-color: var(--ad-border-soft); }
 [data-theme='dark'] .billing-table time,

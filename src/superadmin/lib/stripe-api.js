@@ -48,3 +48,8 @@ export const deletePlan = (id) => postStripe('/api/stripe/plans', { action: 'del
 export const syncFromStripe = (scope = 'all') => postStripe('/api/stripe/sync', { scope })
 export const startSubscription = (restaurantId, planId) => postStripe('/api/stripe/checkout', { restaurantId, planId })
 export const openBillingPortal = (restaurantId) => postStripe('/api/stripe/portal', { restaurantId })
+
+// The sweep normally runs on Vercel Cron. Being able to trigger it by hand is
+// what makes the trial-warning and grace notifications reachable in a session
+// rather than only on the morning after they were written.
+export const runBillingSweep = (dryRun = false) => postStripe('/api/billing/sweep', { dry_run: dryRun })

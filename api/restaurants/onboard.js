@@ -1,5 +1,8 @@
 import { createClient } from '@supabase/supabase-js'
 import { CURRENCIES, COUNTRY_CODES, passwordError, slugError } from '../../shared/slug.js'
+import { customPlanError } from '../../shared/plans.js'
+import { createCustomPlan } from '../_lib/custom-plan.js'
+import { retireStripePlan } from '../_lib/stripe-plans.js'
 
 const admin = createClient(process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -50,10 +53,23 @@ export default async function handler(request, response) {
   // but never removes the restaurant, so the tenant occupied its slug with no
   // way to sign in to it.
   let createdRestaurantId = null
+  // A bespoke plan is created before the owner account, so a failure later has to
+  // remove it too — otherwise a failed attempt leaves an orphan plan in the
+  // catalogue list that no restaurant is on.
+  let createdPlanId = null
+  let createdPlanProductId = null
 
   // Undo whatever this request managed to create, in reverse order. Deleting
   // the restaurant cascades to its subscription, settings, URLs, and admin row.
   const rollback = async () => {
+    if (createdPlanId) {
+      const { error } = await admin.from('subscription_plans').delete().eq('id', createdPlanId)
+      if (error) console.error('[onboard] rollback could not remove custom plan', createdPlanId, error.message)
+      // The Stripe product is closed but kept: a plan this young has no payments
+      // behind it, and leaving an active product would keep it sellable by id.
+      if (createdPlanProductId) await retireStripePlan(createdPlanProductId)
+      createdPlanId = null
+    }
     if (createdRestaurantId) {
       const { error } = await admin.from('restaurants').delete().eq('id', createdRestaurantId)
       if (error) console.error('[onboard] rollback could not remove restaurant', createdRestaurantId, error.message)
@@ -79,8 +95,13 @@ export default async function handler(request, response) {
     const currency = (optionalText(body.currency) || 'PKR').toUpperCase()
     const country = optionalText(body.country)
     const notes = optionalText(body.notes)
-    const planId = optionalText(body.planId)
-    const trialDays = body.trialDays === undefined ? 7 : Number(body.trialDays)
+    const requestedPlanId = optionalText(body.planId)
+    // A bespoke plan replaces the catalogue choice: it is created here, from the
+    // period and price the operator typed, instead of being picked from the list.
+    const customPlan = body.customPlan && typeof body.customPlan === 'object' ? body.customPlan : null
+    // `let`, because a bespoke plan carries its own trial length and overrides
+    // the form's toggle once it exists (see the custom-plan block below).
+    let trialDays = body.trialDays === undefined ? 7 : Number(body.trialDays)
     const customDomain = optionalText(body.customDomain)?.toLowerCase()
 
     if (!name || !ownerName || !ownerEmail || !emailPattern.test(ownerEmail)) {
@@ -107,7 +128,19 @@ export default async function handler(request, response) {
       return response.status(400).json({ error: 'Trial days must be a whole number between 0 and 365' })
     }
 
-    if (planId && !uuidPattern.test(planId)) return response.status(400).json({ error: 'Plan is invalid' })
+    if (requestedPlanId && !uuidPattern.test(requestedPlanId)) return response.status(400).json({ error: 'Plan is invalid' })
+
+    // Validated before anything is created, because the alternative is an owner
+    // account and a restaurant that exist only to be rolled back.
+    if (customPlan) {
+      const problem = customPlanError({
+        days: customPlan.days,
+        price: customPlan.price,
+        trialDays: customPlan.trialDays ?? trialDays,
+        currency: customPlan.currency || currency,
+      })
+      if (problem) return response.status(400).json({ error: problem })
+    }
 
     if (customDomain && !domainPattern.test(customDomain)) {
       return response.status(400).json({ error: 'Enter a custom domain like menu.example.com, without http:// or a path' })
@@ -127,6 +160,26 @@ export default async function handler(request, response) {
     if (customDomain) {
       const { data: taken } = await admin.from('restaurant_urls').select('id').eq('custom_domain', customDomain).maybeSingle()
       if (taken) return response.status(409).json({ error: `${customDomain} is already mapped to another restaurant` })
+    }
+
+    // The bespoke plan first, so its id can be handed to the onboarding RPC in
+    // the same call that creates the subscription.
+    let planId = requestedPlanId
+    if (customPlan) {
+      const created = await createCustomPlan(admin, {
+        restaurantName: name,
+        currency: (customPlan.currency || currency).toUpperCase(),
+        days: customPlan.days,
+        price: customPlan.price,
+        trialDays: customPlan.trialDays ?? trialDays,
+      })
+      if (created.error) return response.status(400).json({ error: created.error })
+      createdPlanId = created.plan.id
+      createdPlanProductId = created.plan.stripe_product_id || null
+      planId = created.plan.id
+      // A bespoke plan decides its own trial, so the operator's "trial" toggle is
+      // already folded into it rather than being applied twice.
+      if (customPlan.trialDays !== undefined) trialDays = Number(customPlan.trialDays) || 0
     }
 
     const { data: createdUser, error: createUserError } = await admin.auth.admin.createUser({
@@ -183,6 +236,8 @@ export default async function handler(request, response) {
       return response.status(500).json({ error: 'Restaurant onboarding returned no result' })
     }
 
+    // `trial_used_at` records that the free trial has been spent, so it can only
+    // ever be offered once per restaurant.
     const subscriptionUpdate = trialDays > 0
       ? { trial_used_at: new Date().toISOString() }
       : { status: 'suspended', trial_used_at: new Date().toISOString() }
@@ -195,6 +250,7 @@ export default async function handler(request, response) {
       restaurant: record,
       credentials: { email: ownerEmail, password: ownerPassword },
       links: { admin: adminUrl, menu: userUrl, customDomain: customDomain || null },
+      customPlan: createdPlanId ? { id: createdPlanId, stripeSynced: Boolean(createdPlanProductId) } : null,
     })
   } catch (error) {
     await rollback()

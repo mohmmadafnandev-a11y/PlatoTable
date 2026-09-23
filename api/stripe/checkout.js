@@ -17,13 +17,30 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 // status, dates, invoices — is written by the webhook, because Stripe is the
 // source of truth for money and the browser never is.
 
-async function requireBillingStaff(request) {
+// Either platform staff (starting a subscription on a restaurant's behalf) or
+// the restaurant's own admin (subscribing themselves). Both are legitimate, and
+// the difference matters only for which restaurant they may touch and where
+// Stripe should send them back afterwards.
+async function requireActor(request) {
   const token = request.headers.authorization?.replace(/^Bearer\s+/i, '')
   if (!token) return null
   const { data: { user } } = await admin.auth.getUser(token)
   if (!user) return null
-  const { data } = await admin.from('super_admins').select('id, role, is_active').eq('user_id', user.id).maybeSingle()
-  return data?.is_active && ['super_admin', 'billing'].includes(data.role) ? data : null
+
+  const [{ data: staff }, { data: membership }] = await Promise.all([
+    admin.from('super_admins').select('id, role, is_active').eq('user_id', user.id).maybeSingle(),
+    admin.from('restaurant_admins').select('restaurant_id, is_active').eq('user_id', user.id).maybeSingle(),
+  ])
+
+  const isStaff = Boolean(staff?.is_active && ['super_admin', 'billing'].includes(staff.role))
+  return {
+    id: user.id,
+    isStaff,
+    // Their own restaurant, if they administer one. This is the only restaurant
+    // a non-staff caller is ever allowed to subscribe.
+    restaurantId: membership?.is_active ? membership.restaurant_id : null,
+    label: isStaff ? `staff:${staff.role}` : 'restaurant admin',
+  }
 }
 
 /** Absolute base for the browser to return to. Canonical first, same as the QR generator. */
@@ -37,16 +54,25 @@ const baseUrl = (request) => {
 export default async function handler(request, response) {
   if (request.method !== 'POST') return response.status(405).json({ error: 'Method not allowed' })
 
-  const staff = await requireBillingStaff(request)
-  if (!staff) return response.status(403).json({ error: 'Only a super admin or billing operator can start a subscription.' })
+  const actor = await requireActor(request)
+  if (!actor) return response.status(403).json({ error: 'Sign in to start a subscription.' })
 
   const key = process.env.STRIPE_SECRET_KEY
   if (!key) return response.status(503).json({ error: 'STRIPE_SECRET_KEY is not set for this deployment, so subscriptions cannot be started yet.' })
   const stripe = new Stripe(key)
 
   try {
-    const { restaurantId, planId } = request.body || {}
-    if (!uuid.test(restaurantId || '')) return response.status(400).json({ error: 'A valid restaurant is required.' })
+    const requested = request.body || {}
+    const planId = requested.planId
+    // Staff may name any restaurant; a restaurant admin may only ever be the
+    // restaurant they belong to, so the id they send is ignored in favour of
+    // their membership rather than trusted.
+    const restaurantId = actor.isStaff ? requested.restaurantId : actor.restaurantId
+
+    if (!restaurantId) {
+      return response.status(403).json({ error: 'This account is not attached to a restaurant, so it has nothing to subscribe.' })
+    }
+    if (!uuid.test(restaurantId)) return response.status(400).json({ error: 'A valid restaurant is required.' })
     if (!uuid.test(planId || '')) return response.status(400).json({ error: 'Choose a plan to subscribe to.' })
 
     const [{ data: restaurant }, { data: plan }] = await Promise.all([
@@ -89,7 +115,20 @@ export default async function handler(request, response) {
     // trials by resubscribing.
     const trialDays = subscription?.trial_used_at ? 0 : Math.max(0, Number(plan.trial_days) || 0)
     const base = baseUrl(request)
-    const returnTo = `${base}/admin/subscriptions`
+    // Stripe refuses a relative return URL with a bare "Not a valid URL", which
+    // reads like a bug in this code rather than a missing setting. Say which one
+    // it is. In production the request always carries a host, so this only fires
+    // when the function is called without one (a script, or a misconfigured
+    // proxy) and no canonical base is set.
+    if (!base) {
+      return response.status(503).json({ error: 'This deployment has no public base URL. Set VITE_CANONICAL_BASE_URL so Stripe knows where to return the customer.' })
+    }
+    // Return them where they started. A restaurant admin lives under their own
+    // slug, and dropping them into the platform's subscription list would show
+    // them a screen that is not theirs.
+    const returnTo = actor.isStaff
+      ? `${base}/admin/subscriptions`
+      : `${base}/admin/${restaurant.subdomain}/subscription`
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
@@ -98,7 +137,7 @@ export default async function handler(request, response) {
       success_url: `${returnTo}?checkout=success&restaurant=${restaurant.id}`,
       cancel_url: `${returnTo}?checkout=canceled&restaurant=${restaurant.id}`,
       client_reference_id: restaurant.id,
-      metadata: { restaurant_id: restaurant.id, plan_id: plan.id, initiated_by: staff.id },
+      metadata: { restaurant_id: restaurant.id, plan_id: plan.id, initiated_by: actor.id, initiated_by_role: actor.label },
       // Carried onto the subscription itself so the webhook can resolve a
       // subscription back to a restaurant without a lookup table.
       subscription_data: {
@@ -130,10 +169,10 @@ export default async function handler(request, response) {
     }
 
     await admin.from('activity_logs').insert({
-      super_admin_id: staff.id,
+      super_admin_id: actor.isStaff ? actor.id : null,
       restaurant_id: restaurant.id,
       action: 'subscription.checkout_started',
-      details: { plan_id: plan.id, plan: plan.name, currency: priced.currency, amount: priced.amount, trial_days: trialDays, stripe_price_id: priced.priceId },
+      details: { plan_id: plan.id, plan: plan.name, currency: priced.currency, amount: priced.amount, trial_days: trialDays, stripe_price_id: priced.priceId, started_by: actor.label },
     })
 
     return response.status(200).json({ url: session.url, sessionId: session.id, currency: priced.currency, amount: priced.amount, trialDays })
