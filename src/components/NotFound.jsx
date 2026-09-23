@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import BrandMark from './BrandMark'
 
 // Shown for an unknown path or a slug that does not match any restaurant.
 // Replaces the old catch-all, which redirected every unknown URL to /scan and
@@ -6,7 +7,7 @@ import { Link } from 'react-router-dom'
 export default function NotFound() {
   return (
     <main className="scan-error">
-      <div className="brand-mark">P</div>
+      <BrandMark size={42} />
       <span>⌁</span>
       <h1>Page not found</h1>
       <p>This link does not match a restaurant or an available page.</p>

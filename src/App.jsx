@@ -4,6 +4,7 @@ import CustomerApp from './components/CustomerApp'
 import AdminApp from './components/AdminApp'
 import Landing from './components/Landing'
 import NotFound from './components/NotFound'
+import BrandMark from './components/BrandMark'
 import SuperAdminApp from './superadmin/App'
 import TenantWelcome from './components/TenantWelcome'
 import { supabase } from './lib/supabase'
@@ -18,7 +19,7 @@ function ScanError({ reason = 'invalid' }) {
     invalid: ['Please scan again', 'This link is not a valid table QR code. Scan the QR code displayed on your table.'],
     subscription: ['Menu temporarily unavailable', 'This restaurant menu is temporarily unavailable. Please ask a member of staff for help.'], 
   }[reason] || ['Please scan again', 'This QR code could not be verified.']
-  return <main className="scan-error"><div className="brand-mark">P</div><span>{reason === 'expired' ? '⏱' : '⌁'}</span><h1>{content[0]}</h1><p>{content[1]}</p></main>
+  return <main className="scan-error"><BrandMark size={42} /><span>{reason === 'expired' ? '⏱' : '⌁'}</span><h1>{content[0]}</h1><p>{content[1]}</p></main>
 }
 
 const localSessionKey = (token) => `palatotabale-session:${token}`
@@ -30,7 +31,7 @@ const readLocalSession = (token, sessionToken) => {
 }
 
 function MobileOnly() {
-  return <main className="mobile-only"><div className="brand-mark">P</div><span>▣</span><h1>Open this menu on your phone</h1><p>Please scan the QR code with a mobile device to view the table menu.</p></main>
+  return <main className="mobile-only"><BrandMark size={42} /><span>▣</span><h1>Open this menu on your phone</h1><p>Please scan the QR code with a mobile device to view the table menu.</p></main>
 }
 
 function ScanRoute() {
@@ -67,7 +68,7 @@ function ScanRoute() {
     openSession(); return () => { active = false }
   }, [token, sessionToken, setParams, isMobile])
   if (!isMobile) return <MobileOnly />
-  if (!result) return <main className="scan-error"><div className="brand-mark">P</div><span className="scan-spinner" /><h1>Opening your table menu</h1><p>Please wait a moment.</p></main>
+  if (!result) return <main className="scan-error"><BrandMark size={42} /><span className="scan-spinner" /><h1>Opening your table menu</h1><p>Please wait a moment.</p></main>
   if (!result.valid) return <ScanError reason={result.reason} />
   return <CustomerApp session={result} />
 }

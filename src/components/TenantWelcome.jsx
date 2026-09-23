@@ -3,6 +3,8 @@ import { Link, useParams } from 'react-router-dom'
 import { Mail, Phone } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import NotFound from './NotFound'
+import BrandMark from './BrandMark'
+import brandLogo from '../assets/brand-logo.png'
 import './Landing.css'
 
 // /<slug> carries no QR token, so there is no table and no session to open. It
@@ -45,7 +47,9 @@ export default function TenantWelcome() {
     return (
       <div className="lp-root lp-tenant">
         <div className="lp-tenant-card">
-          <div className="lp-tenant-initial">P</div>
+          {/* No restaurant to show, so the platform lockup is the honest thing
+              here. This card is light and wide, so the full logo reads. */}
+          <img className="lp-tenant-platlogo" src={brandLogo} alt="Plato Table" />
           <h1>Not available</h1>
           <p>This restaurant page cannot be loaded right now. Please try again shortly.</p>
         </div>
@@ -97,7 +101,7 @@ export default function TenantWelcome() {
           Sitting at a table? Scan the QR code on your table to open the live menu.
         </p>
         <p className="lp-tenant-foot">
-          Powered by <Link to="/">Plato Table</Link> · digital menus for restaurants
+          <BrandMark size={18} /> Powered by <Link to="/">Plato Table</Link> · digital menus for restaurants
         </p>
       </div>
     </div>

@@ -14,6 +14,7 @@ import {
   Check,
   UtensilsCrossed,
 } from 'lucide-react'
+import brandLogo from '../assets/brand-logo.png'
 import './Landing.css'
 
 // Fallbacks, used only when platform_settings cannot be read. The live values
@@ -197,11 +198,11 @@ export default function Landing() {
       <header className={`lp-header${stuck ? ' is-stuck' : ''}`}>
         <div className="lp-shell">
           <Link className="lp-brand" to="/">
-            <span className="lp-mark">P</span>
-            <span>
-              <strong>{platformName}</strong>
-              <small>Digital menus</small>
-            </span>
+            {/* The full lockup rather than the square mark: this header is the
+                one light surface with room for the wordmark and its tagline to
+                both stay legible. Dark surfaces use the square mark instead,
+                because the "Plato" half of this artwork is black. */}
+            <img className="lp-brand-logo" src={brandLogo} alt={`${platformName} — digital menus for restaurants`} />
           </Link>
           <nav className="lp-nav">
             <a href="#how">How it works</a>

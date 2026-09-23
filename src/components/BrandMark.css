@@ -1,0 +1,13 @@
+/* The Plato Table app mark.
+ *
+ * The PNG is already a finished badge with transparent corners, so this rule
+ * deliberately sets no background, border or drop shadow: anything opaque
+ * behind it would show as a square peeking out from behind the rounded tile.
+ *
+ * `inline-block` lets it flow inside a sentence ("Powered by …"), and
+ * `flex: 0 0 auto` stops it being squashed in the flex rows every panel uses. */
+.brand-mark {
+  display: inline-block;
+  flex: 0 0 auto;
+  vertical-align: middle;
+}

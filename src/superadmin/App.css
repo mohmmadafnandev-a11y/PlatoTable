@@ -19,9 +19,24 @@
  * sidebar and the content's margin. Animating two hard-coded values separately
  * would let them drift apart mid-transition and show a seam.
  *
- * Collapsing is desktop-only: on a phone the sidebar is an off-canvas drawer, so
- * a 5rem rail there would be worse than useless. Every collapsed rule is inside
- * the md breakpoint for that reason.
+ * The whole geometry is chosen so that NOTHING MOVES except the rail itself.
+ * Only `width`, `padding`, `opacity` and `max-width` are animated, because those
+ * are the only properties here that interpolate. An earlier version centred the
+ * icons with `justify-content: center` and `margin-inline: auto` — neither of
+ * which is animatable — so the moment the class flipped the icon snapped to the
+ * middle of the still-wide row and then slid back as the row shrank. That is
+ * what made closing look broken.
+ *
+ * The arithmetic that removes the movement:
+ *   rail            = 4.625rem (74px), centre at 37px
+ *   item inset      = 0.75rem (12px), unchanged in both states
+ *   icon            = 18px, so its centre sits at 16 (sidebar padding) + 12 + 9
+ *                     = 37px from the rail's left edge — already centred once
+ *                     the rail narrows, with no repositioning needed
+ *   item width      = 2.625rem (42px), so 12 + 9 = 21 = half of 42
+ *
+ * Collapsing is desktop-only: on a phone the sidebar is an off-canvas drawer,
+ * where a 4.625rem rail would be worse than useless.
  */
 .sa-shell { --sa-rail: 16rem; }
 
@@ -33,23 +48,53 @@
 
 .sa-content { transition: margin-left .3s cubic-bezier(.2, .75, .3, 1); }
 
+/* The brand row slides its 12px inset to 3px when collapsed. That is what puts
+   the 36px logo's centre on the rail's 37px centre line: 16 + 3 + 18 = 37. */
+.sa-brand { transition: padding-left .3s cubic-bezier(.2, .75, .3, 1); }
+
 /* Labels are collapsed with max-width as well as opacity. Opacity alone would
-   leave the text occupying its space, so the icons would never actually move. */
+   leave the text occupying its space, so the row could never shrink. */
 .sa-label,
 .sa-brand-text {
   max-width: 12rem;
   max-height: 3rem;
   overflow: hidden;
   white-space: nowrap;
-  transition: opacity .16s ease, max-width .3s cubic-bezier(.2, .75, .3, 1), max-height .3s cubic-bezier(.2, .75, .3, 1);
+  transition: opacity .18s ease, max-width .3s cubic-bezier(.2, .75, .3, 1), max-height .3s cubic-bezier(.2, .75, .3, 1);
 }
 
-/* Tooltip shown in place of the label while collapsed. Kept hidden by default
-   so that hovering an expanded item does not show a duplicate of its label. */
+/* The destination list scrolls, so the footer stays reachable however many
+   destinations are added. `min-height: 0` is what actually allows a flex child
+   to scroll — without it the child refuses to shrink below its content.
+   overflow-x is hidden because a single-axis `auto` promotes the other axis to
+   `auto` as well, which would put a horizontal scrollbar in the rail.
+
+   A visible scrollbar in the open sidebar, none in the rail: 6px of scrollbar
+   would leave 36px for a 42px box, so the rail is the one place it has to go. */
+.sa-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden auto;
+  /* The standard properties only. Mixing in the legacy ::-webkit-scrollbar
+     rules makes Chromium render the reserved gutter and the thumb at different
+     widths, which showed up as stray slivers beside the scrollbar. */
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+/* Tooltip shown in place of the label while collapsed.
+
+   Deliberately a SIBLING of the scrolling nav rather than a child of the row it
+   describes: an ancestor with `overflow: auto` clips everything inside it, so a
+   tooltip nested in the list would be cut off at the sidebar edge. Only `top`
+   comes from JavaScript — the horizontal offset is the sidebar's own width.
+
+   It animates in with a keyframe rather than a transition, because the element
+   is mounted on hover and a transition needs a previous state to move from. */
 .sa-tip {
+  display: none;
   position: absolute;
   left: calc(100% + .7rem);
-  top: 50%;
   z-index: 40;
   padding: .42rem .68rem;
   border-radius: .55rem;
@@ -59,54 +104,60 @@
   font-weight: 600;
   white-space: nowrap;
   box-shadow: 0 12px 26px rgba(15, 23, 42, .3);
-  opacity: 0;
   pointer-events: none;
-  transform: translateY(-50%) translateX(-5px);
-  transition: opacity .14s ease, transform .2s cubic-bezier(.2, .75, .3, 1);
+  transform: translateY(-50%);
+  animation: sa-tip-in .16s ease both;
+}
+
+@keyframes sa-tip-in {
+  from { opacity: 0; transform: translateY(-50%) translateX(-6px); }
+  to { opacity: 1; transform: translateY(-50%) translateX(0); }
 }
 
 @media (min-width: 768px) {
-  .sa-shell.is-collapsed { --sa-rail: 5rem; }
+  .sa-tip { display: block; }
+}
+
+@media (min-width: 768px) {
+  .sa-shell.is-collapsed { --sa-rail: 4.625rem; }
   .sa-aside { width: var(--sa-rail); }
   .sa-content { margin-left: var(--sa-rail); }
 
   .sa-shell.is-collapsed .sa-label,
   .sa-shell.is-collapsed .sa-brand-text { opacity: 0; max-width: 0; max-height: 0; }
 
-  /* Stack the brand above its toggle: at 5rem wide there is no room for a row. */
-  .sa-shell.is-collapsed .sa-brand {
-    flex-direction: column;
-    gap: .5rem;
-    padding-inline: 0;
+  /* The brand row keeps its direction and its height. Switching it to a column
+     would change its height in a single frame, which shunted every icon below
+     it — the other half of the jank. Only the inset moves. */
+  .sa-shell.is-collapsed .sa-brand { padding-left: 3px; padding-right: 0; }
+
+  /* Each destination narrows into a rounded icon box around its icon. Note what
+     is NOT here: no padding change (that would move the icon), no
+     justify-content, no margin-inline. The row is 42px and the icon is
+     inherently centred inside it.
+
+     2.625rem is also deliberately SMALLER than the expanded row's 2.75rem. A
+     taller collapsed row makes the whole column taller than the open one, which
+     is how the last icons ended up pushed off the bottom of the screen. */
+  .sa-shell.is-collapsed .nav-link,
+  .sa-shell.is-collapsed .sa-toggle {
+    width: 2.625rem;
+    min-height: 2.625rem;
   }
 
-  /* Each destination becomes a rounded icon box. The 3rem box plus the 1rem
-     sidebar padding is exactly the 5rem rail, so the icons sit centred. */
-  .sa-shell.is-collapsed .nav-link {
-    width: 3rem;
-    min-height: 3rem;
-    margin-inline: auto;
-    padding: 0;
-    justify-content: center;
-    /* The label is still present at zero width, so its flex gap would survive
-       and push the icon 6px off centre. */
-    gap: 0;
-    border: 1px solid transparent;
-    /* The 3px inset bar of the active state reads as a stray mark in a 3rem
-       square, so the collapsed rail marks the current page with a ring instead. */
-    box-shadow: none;
-  }
-  .sa-shell.is-collapsed .nav-link:hover { border-color: #e2e8f0; }
-  .sa-shell.is-collapsed .nav-link.active { box-shadow: none; border-color: #c7d2fe; }
+  /* The active page is marked with a ring rather than the 3px inset bar, which
+     reads as a stray mark in a 42px square. Drawn with box-shadow so that
+     turning it on cannot change the row's size. */
+  .sa-shell.is-collapsed .nav-link:hover { box-shadow: inset 0 0 0 1px #e2e8f0; }
+  .sa-shell.is-collapsed .nav-link.active { box-shadow: inset 0 0 0 1px #c7d2fe; }
 
-  .sa-shell.is-collapsed .nav-link:hover .sa-tip,
-  .sa-shell.is-collapsed .nav-link:focus-visible .sa-tip {
-    opacity: 1;
-    transform: translateY(-50%) translateX(0);
-  }
+  /* No room for a scrollbar beside a 42px box — it would take roughly 11px out
+     of the 42px the row needs and pull the icons off centre. The list still
+     scrolls by wheel, trackpad and keyboard; only the indicator is suppressed. */
+  .sa-shell.is-collapsed .sa-nav { scrollbar-width: none; }
 
-  /* The status card keeps only its light, centred, rather than being hidden
-     altogether — the panel should never look like it lost a feature. */
+  /* The status card keeps only its light rather than disappearing — the panel
+     should never look like it lost a feature. */
   .sa-shell.is-collapsed .sa-status { padding: .95rem .5rem; }
   .sa-shell.is-collapsed .sa-status-detail { display: none; }
   .sa-shell.is-collapsed .sa-status-row { justify-content: center; }

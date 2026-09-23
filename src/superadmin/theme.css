@@ -48,8 +48,9 @@
 /* Collapsed rail. The light ring colours are invisible on the dark surface, and
    the tooltip needs a surface of its own rather than the near-black page. */
 .sa-scope[data-theme='dark'] .sa-tip { background: #1e293b; color: #e2e8f0; box-shadow: 0 12px 26px rgba(0, 0, 0, .55); }
-.sa-scope[data-theme='dark'] .sa-shell.is-collapsed .nav-link:hover { border-color: rgba(148, 163, 184, .38); }
-.sa-scope[data-theme='dark'] .sa-shell.is-collapsed .nav-link.active { border-color: rgba(129, 140, 248, .55); }
+.sa-scope[data-theme='dark'] .sa-nav { scrollbar-color: #334155 transparent; }
+.sa-scope[data-theme='dark'] .sa-shell.is-collapsed .nav-link:hover { box-shadow: inset 0 0 0 1px rgba(148, 163, 184, .38); }
+.sa-scope[data-theme='dark'] .sa-shell.is-collapsed .nav-link.active { box-shadow: inset 0 0 0 1px rgba(129, 140, 248, .55); }
 
 .sa-scope[data-theme='dark'] .stat-card { background: #131c2e; border-color: #253048; }
 .sa-scope[data-theme='dark'] .stat-card:hover { box-shadow: 0 18px 36px rgba(0, 0, 0, .45); }

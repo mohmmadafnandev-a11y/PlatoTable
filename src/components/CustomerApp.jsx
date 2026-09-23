@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import BrandMark from './BrandMark'
 
 const pages = { menu: ['Menu', '⌂'], search: ['Search', '⌕'], offers: ['Offers', '✦'], settings: ['Settings', '⚙'] }
 const languages = { en: 'English', ur: 'اردو', ps: 'پښتو' }
@@ -116,10 +117,10 @@ export default function CustomerApp({ session }) {
   const toggleTheme = () => { const next = !darkMode; setDarkMode(next); localStorage.setItem('menu-theme', next ? 'dark' : 'light') }
   const showItems = activePage === 'menu' || activePage === 'search'
 
-  if (expired) return <main className="scan-error"><div className="brand-mark">P</div><span>⏱</span><h1>Session expired</h1><p>Your 15-minute table session has ended. Please scan the QR code on your table again.</p></main>
+  if (expired) return <main className="scan-error"><BrandMark size={42} /><span>⏱</span><h1>Session expired</h1><p>Your 15-minute table session has ended. Please scan the QR code on your table again.</p></main>
 
   return <main className={darkMode ? 'app-shell dark-mode-shell' : 'app-shell'}><section className={darkMode ? 'menu-app dark-theme' : 'menu-app'}>
-    <header className="customer-topbar"><div className="palato-brand"><div className="brand-mark">P</div><div><strong>PalatoTable</strong><small>{session.restaurant_name}</small></div></div><div className="session-pill"><i /><span>{session.table_number}</span><b>{minutes}:{seconds}</b></div></header>
+    <header className="customer-topbar"><div className="palato-brand"><BrandMark size={42} /><div><strong>Plato Table</strong><small>{session.restaurant_name}</small></div></div><div className="session-pill"><i /><span>{session.table_number}</span><b>{minutes}:{seconds}</b></div></header>
     <section className="content-area">
       {activePage === 'menu' && <><section className="menu-intro"><div><span className="eyebrow">DIGITAL TABLE MENU</span><h1>{text.choose}<br /><em>{text.delicious}</em></h1></div><button className="search-button" onClick={() => go('search')} aria-label="Search menu">⌕</button></section><div className="category-row">{[{ id: 'all', name: 'All dishes', icon: '✦' }, ...categories].map((item) => <button key={item.id} className={category === item.id ? 'category active' : 'category'} onClick={() => setCategory(item.id)}><span>{item.icon || '•'}</span>{item.name}</button>)}</div></>}
       {activePage === 'search' && <section className="search-page"><div className="section-heading"><div><span className="eyebrow">FIND YOUR FAVOURITE</span><h1>{text.searchMenu}</h1></div><button className="filter-button" onClick={() => setFilterOpen(true)}>☷ <span>{text.filter}</span>{activeFilters > 0 && <b>{activeFilters}</b>}</button></div><label className="search-field page-search"><span>⌕</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={text.dishes} /><button onClick={() => setQuery('')} aria-label="Clear search">{query ? '×' : ''}</button></label><div className="search-meta"><span>{visible.length} {text.found}</span>{activeFilters > 0 && <button onClick={() => setFilterOpen(true)}>Filters active</button>}</div></section>}
