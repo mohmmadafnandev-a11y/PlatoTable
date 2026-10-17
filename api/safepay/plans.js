@@ -1,28 +1,23 @@
-import { createClient } from '@supabase/supabase-js'
-import { CURRENCIES, PRICE_COLUMNS, featureList, planDurationDays, planError } from '../../shared/plans.js'
-// The Stripe half of a plan lives in a shared module: onboarding now creates a
-// bespoke plan for a single restaurant, and two copies of "prices are immutable
-// in Stripe" would eventually disagree.
-import { retireStripePlan, syncSavedPlan } from '../_lib/stripe-plans.js'
+import { CURRENCIES, PRICE_COLUMNS, featureList, planDurationDays, planError, withLegacyPricesZeroed } from '../../shared/plans.js'
+import { admin } from '../_lib/admin.js'
+import { withinRateLimit } from '../_lib/rate-limit.js'
+import { retireSafepayPlans, syncSavedPlan } from '../_lib/safepay-plans.js'
 
-
-const admin = createClient(process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
-
-// The whole point of this endpoint: a plan is only real once Stripe knows about
-// it. Prices are immutable in Stripe — changing an amount means creating a new
-// Price and deactivating the old one — so this module owns that dance rather
-// than leaving it to whichever caller happens to run first.
+// The whole point of this endpoint: a plan is only real once Safepay can charge
+// for it. Prices are immutable there — changing an amount means creating a new
+// plan and retiring the old one — so this module owns that dance rather than
+// leaving it to whichever caller happens to run first.
 //
 // Two principles run through it:
 //
-//  1. The database row is written BEFORE Stripe is called. An operator who typed
-//     a plan must not lose it because Stripe was unreachable or refused one
-//     currency. Synchronisation is then reported honestly, per currency.
+//  1. The database row is written BEFORE Safepay is called. An operator who
+//     typed a plan must not lose it because Safepay was unreachable.
+//     Synchronisation is then reported honestly, and the checkout refuses a plan
+//     whose token is stale rather than charging the old price.
 //
-//  2. Partial success is normal and is not hidden. Stripe rejects currencies an
-//     account cannot process, so a plan can legitimately end up priced in USD
-//     and AED but not PKR. That is recorded in `stripe_sync_error` and shown on
-//     the screen, instead of a blanket failure that hides which part worked.
+//  2. Safepay's own refusals are reported rather than hidden. They land in
+//     `safepay_sync_error` and on the screen, instead of a blanket failure that
+//     hides which part worked.
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -36,12 +31,14 @@ async function requireBillingStaff(request) {
   return data?.is_active && ['super_admin', 'billing'].includes(data.role) ? data : null
 }
 
-
 export default async function handler(request, response) {
   if (request.method !== 'POST') return response.status(405).json({ error: 'Method not allowed' })
 
   const staff = await requireBillingStaff(request)
   if (!staff) return response.status(403).json({ error: 'Only a super admin or billing operator can manage plans.' })
+
+  // Saving a plan creates or retires Safepay plans.
+  if (!(await withinRateLimit(request, response, { route: 'safepay-plans', max: 60, actorId: staff.id }))) return
 
   const { action = 'save', plan } = request.body || {}
 
@@ -59,18 +56,27 @@ export default async function handler(request, response) {
       if (countError) throw countError
       if (count) return response.status(409).json({ error: `${count} restaurant${count === 1 ? ' is' : 's are'} on this plan. Deactivate it instead so their billing history stays intact.` })
 
-      const { data: existing } = await admin.from('subscription_plans').select('id, name, stripe_product_id').eq('id', id).maybeSingle()
+      const { data: existing } = await admin
+        .from('subscription_plans')
+        .select('id, name, safepay_plan_id, safepay_plan_id_trial')
+        .eq('id', id)
+        .maybeSingle()
       if (!existing) return response.status(404).json({ error: 'That plan no longer exists.' })
 
       const { error } = await admin.from('subscription_plans').delete().eq('id', id)
       if (error) throw error
 
-      await retireStripePlan(existing.stripe_product_id)
+      await retireSafepayPlans(existing)
 
       await admin.from('activity_logs').insert({
         super_admin_id: staff.id,
         action: 'plan.deleted',
-        details: { plan_id: id, name: existing.name, stripe_product_id: existing.stripe_product_id },
+        details: {
+          plan_id: id,
+          name: existing.name,
+          safepay_plan_id: existing.safepay_plan_id,
+          safepay_plan_id_trial: existing.safepay_plan_id_trial,
+        },
       })
       return response.status(200).json({ deleted: true, id })
     }
@@ -90,9 +96,6 @@ export default async function handler(request, response) {
     })
     if (problem) return response.status(400).json({ error: problem })
 
-    // Only now normalise, so '' and '19' behave the same as 19 downstream. The
-    // whitelist must name every interval the validator accepts, or a day-based
-    // custom plan would be silently rewritten into a monthly one here.
     const isCustom = plan?.is_custom === true || plan?.is_custom === 'true'
     const input = {
       id: uuid.test(plan?.id || '') ? plan.id : null,
@@ -101,8 +104,6 @@ export default async function handler(request, response) {
       interval_count: Number(plan.interval_count ?? 1),
       trial_days: Number(plan.trial_days ?? 0),
       is_active: plan?.is_active !== false,
-      // `is_public` defaults to true, so an ordinary plan saved by a screen that
-      // does not know about the flag is not accidentally hidden from onboarding.
       is_custom: isCustom,
       is_public: !(plan?.is_public === false || plan?.is_public === 'false'),
       features: featureList(plan?.features),
@@ -126,13 +127,14 @@ export default async function handler(request, response) {
     }
     // duration_days is derived by the database trigger; send the value the trigger
     // will compute anyway so the returned row is correct on the insert path too.
-    // `planDurationDays` is shared with the browser so the preview and the stored
-    // row cannot disagree about what a 90 day plan is.
     record.duration_days = planDurationDays(input.interval, input.interval_count)
     for (const currency of CURRENCIES) record[PRICE_COLUMNS[currency]] = input.prices[currency]
+    // Anything the platform used to sell in is written as 0, never left at the
+    // column's default or at a figure an older save stored.
+    withLegacyPricesZeroed(record)
 
     // The unique index on lower(name) turns a duplicate into a real error rather
-    // than two Stripe products sharing one name.
+    // than two Safepay plans sharing one name.
     let saved
     if (input.id) {
       const { data, error } = await admin.from('subscription_plans').update(record).eq('id', input.id).select('*').single()
@@ -144,9 +146,10 @@ export default async function handler(request, response) {
       saved = data
     }
 
-    // Now Stripe. A failure here is reported, never thrown: the plan the operator
-    // typed is already saved and must not be rolled back behind their back.
-    const { plan: synced, report: stripeReport } = await syncSavedPlan(admin, saved)
+    // Now Safepay. A failure here is reported, never thrown: the plan the
+    // operator typed is already saved and must not be rolled back behind their
+    // back.
+    const { plan: synced, report } = await syncSavedPlan(admin, saved)
     saved = synced
 
     await admin.from('activity_logs').insert({
@@ -157,18 +160,19 @@ export default async function handler(request, response) {
         name: saved.name,
         interval: saved.interval,
         interval_count: saved.interval_count,
-        stripe_product_id: saved.stripe_product_id,
-        stripe_synced: stripeReport.synced,
-        stripe_errors: stripeReport.errors,
+        safepay_plan_id: saved.safepay_plan_id,
+        safepay_plan_id_trial: saved.safepay_plan_id_trial,
+        safepay_synced: report.synced,
+        safepay_errors: report.errors,
       },
     })
 
-    return response.status(200).json({ plan: saved, stripe: stripeReport })
+    return response.status(200).json({ plan: saved, safepay: report })
   } catch (error) {
     // A unique-name violation is a user mistake, not a server fault, so it earns
     // a 409 and a sentence a person can act on.
     if (error?.code === '23505') return response.status(409).json({ error: `A plan called “${plan?.name?.trim()}” already exists. Plan names must be unique.` })
-    console.error('[plans] failed:', error)
+    console.error('[safepay/plans] failed:', error)
     return response.status(500).json({ error: error?.message || 'The plan could not be saved.' })
   }
 }

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
-import { KeyRound, Save, Trash2, UserPlus, Users } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Copy, KeyRound, Link2, Save, Trash2, UserPlus, Users } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { postAuthorized } from '../lib/api'
 import { logActivity } from '../lib/data'
 import { PASSWORD_MIN, passwordError, suggestPassword } from '../../../shared/slug.js'
 import { dateTime, shortDate } from '../lib/format'
@@ -108,6 +109,8 @@ export default function Team({ profile }) {
   const [inviting, setInviting] = useState(false)
   const [feedback, setFeedback] = useState(null)
   const [busy, setBusy] = useState('')
+  const [resetLink, setResetLink] = useState(null)
+  const [copied, setCopied] = useState('')
 
   const load = useCallback(() => {
     if (!supabase) return Promise.resolve()
@@ -152,14 +155,30 @@ export default function Team({ profile }) {
     load()
   }
 
-  const sendReset = async (member) => {
+  // A link the operator can hand over, rather than an email this deployment may
+  // not be able to send. The recipient picks their own password on the platform's
+  // recovery screen, and nothing here ever sees it.
+  const createResetLink = async (member) => {
     setBusy(member.id)
-    // Goes through the signed-out reset flow, so it never reveals whether the
-    // address exists and the new password is chosen by the owner, not by us.
-    const { error: failure } = await supabase.auth.resetPasswordForEmail(member.email)
+    setFeedback(null)
+    try {
+      const result = await postAuthorized('/api/team/link', { userId: member.user_id })
+      setResetLink({ memberId: member.id, link: result.link, email: result.email, expiresInMinutes: result.expiresInMinutes })
+      await logActivity({ superAdminId: profile?.id, action: 'team_reset_link_created', details: { email: member.email } })
+    } catch (failure) {
+      setFeedback({ tone: 'danger', text: failure.message })
+    }
     setBusy('')
-    if (failure) return setFeedback({ tone: 'danger', text: failure.message })
-    setFeedback({ tone: 'success', text: `Password reset email sent to ${member.email}.` })
+  }
+
+  const copyLink = async (value) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(value)
+      window.setTimeout(() => setCopied(''), 1600)
+    } catch {
+      setFeedback({ tone: 'warning', text: 'The browser blocked clipboard access. Select the link and copy it by hand.' })
+    }
   }
 
   return (
@@ -214,7 +233,8 @@ export default function Team({ profile }) {
                       const isSelf = member.user_id === profile?.user_id
                       const rowBusy = busy === member.id
                       return (
-                        <tr key={member.id} className="border-t border-slate-100 align-top transition hover:bg-indigo-50/40">
+                        <Fragment key={member.id}>
+                        <tr className="border-t border-slate-100 align-top transition hover:bg-indigo-50/40">
                           <td className="p-4">
                             <strong className="block font-semibold text-slate-900">
                               {member.name || 'Unnamed'}{isSelf && <span className="ml-2 rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-700">You</span>}
@@ -245,8 +265,8 @@ export default function Team({ profile }) {
                               >
                                 {member.is_active ? 'Deactivate' : 'Activate'}
                               </button>
-                              <button disabled={rowBusy} onClick={() => sendReset(member)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-40">
-                                <KeyRound size={13} />Reset password
+                              <button disabled={rowBusy || !member.is_active} title={member.is_active ? `Create a sign-in link for ${member.email}` : 'Activate this member first'} onClick={() => createResetLink(member)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-40">
+                                <KeyRound size={13} />Sign-in link
                               </button>
                               <button disabled={rowBusy || isSelf} onClick={() => remove(member)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-600 disabled:opacity-40">
                                 <Trash2 size={13} />Remove
@@ -254,6 +274,26 @@ export default function Team({ profile }) {
                             </div>
                           </td>
                         </tr>
+                        {/* The link gets its own row: an extra cell inside the
+                            member row would make every later column shift. */}
+                        {resetLink?.memberId === member.id && (
+                          <tr className="bg-slate-50">
+                            <td colSpan={5} className="px-4 pb-4">
+                              <div className="grid gap-2">
+                                <p className="text-xs text-slate-500">
+                                  Send this to {resetLink.email}. It sets a new password on the platform’s own recovery screen, needs no mail server, expires in about {resetLink.expiresInMinutes} minutes, and works once.
+                                </p>
+                                <code className="break-all rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600">{resetLink.link}</code>
+                                <div className="flex flex-wrap gap-2">
+                                  <button onClick={() => copyLink(resetLink.link)} className="inline-flex items-center gap-1.5 rounded-md bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600"><Copy size={13} />{copied === resetLink.link ? 'Copied' : 'Copy link'}</button>
+                                  <a href={resetLink.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-md bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600"><Link2 size={13} />Open</a>
+                                  <button onClick={() => setResetLink(null)} className="ml-auto text-xs font-semibold text-slate-500">Close</button>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </Fragment>
                       )
                     })}
                   </tbody>
@@ -265,9 +305,11 @@ export default function Team({ profile }) {
 
       <div className="mt-6">
         <Notice tone="info">
-          Deactivating a member blocks the panel immediately but leaves their sign-in intact;
-          removing them deletes the sign-in entirely. You cannot deactivate or remove your own account,
-          which is what keeps the last Super Admin from locking everyone out.
+          A sign-in link is the reliable way to hand somebody back into their account: it needs no mail
+          server, it works once, and the member chooses the password themselves. Deactivating a member
+          blocks the panel immediately but leaves their sign-in intact; removing them deletes the sign-in
+          entirely. You cannot deactivate or remove your own account, which is what keeps the last
+          Super Admin from locking everyone out.
         </Notice>
       </div>
 

@@ -160,16 +160,53 @@
 .sa-scope[data-theme='dark'] select option { background-color: #131c2e; color: #e2e8f0; }
 .sa-scope[data-theme='dark'] [class~='bg-transparent'] { background-color: transparent; }
 
-/* The sign-in art panel is already dark in both themes, so the generic text
-   overrides above would dim it. Restore its intended values. */
-.sa-scope[data-theme='dark'] .login-art [class~='text-slate-300'] { color: #cbd5e1; }
-.sa-scope[data-theme='dark'] .login-art [class~='text-slate-200'] { color: #e2e8f0; }
-.sa-scope[data-theme='dark'] .login-art [class~='text-indigo-200'] { color: #c7d2fe; }
-.sa-scope[data-theme='dark'] .login-art [class~='text-emerald-300'] { color: #6ee7b7; }
-.sa-scope[data-theme='dark'] .login-art [class~='text-white'] { color: #fff; }
+/* The sign-in screen keeps the landing page's light palette in both themes.
+ *
+ * These come after the generic overrides above for a reason: the input rule is
+ * written with the same shape (`input:not([type='checkbox']):not([type='radio'])`)
+ * so it carries the same specificity, which means source order decides it. A
+ * shorter selector here would have lost to the dark form styling and produced a
+ * navy input on a white card. */
+.sa-scope[data-theme='dark'] .sa-login-page { background-color: #f3f0ea; }
+.sa-scope[data-theme='dark'] .sa-login-page .sa-login-card { background-color: #fff; border-color: #e5dfd5; }
+.sa-scope[data-theme='dark'] .sa-login-page .sa-login-display { color: #1b1a18; }
+.sa-scope[data-theme='dark'] .sa-login-page input:not([type='checkbox']):not([type='radio']) {
+  background-color: #fff;
+  border-color: #e5dfd5;
+  color: #1b1a18;
+}
+.sa-scope[data-theme='dark'] .sa-login-page input::placeholder { color: #a8a29e; }
 
 /* Charts draw in SVG, so their colours live here rather than in utilities. */
 .sa-scope[data-theme='dark'] .chart-grid line { stroke: #253048; }
 .sa-scope[data-theme='dark'] .chart-line { stroke: #818cf8; }
 .sa-scope[data-theme='dark'] .chart-dot { fill: #131c2e; stroke: #818cf8; }
 .sa-scope[data-theme='dark'] .chart-label { fill: #7c8aa0; }
+
+/* Notification bell. The panel is a raised surface of its own, so it sits above
+   the page rather than sharing the card background, and the badge ring has to
+   match the header instead of the white it assumes in light mode. */
+.sa-scope[data-theme='dark'] .sa-bell-button { color: #94a3b8; }
+.sa-scope[data-theme='dark'] .sa-bell-button:hover,
+.sa-scope[data-theme='dark'] .sa-bell-button[aria-expanded='true'] { background: #1e293b; }
+.sa-scope[data-theme='dark'] .sa-bell-badge { background: #ef4444; box-shadow: 0 0 0 2px #131c2e; }
+.sa-scope[data-theme='dark'] .sa-bell-panel { border-color: #253048; background: #162034; box-shadow: 0 22px 48px rgba(0, 0, 0, .6); }
+.sa-scope[data-theme='dark'] .sa-bell-panel > header { border-bottom-color: #253048; }
+.sa-scope[data-theme='dark'] .sa-bell-panel > header small { color: #94a3b8; }
+.sa-scope[data-theme='dark'] .sa-bell-mark { color: #a5b4fc; }
+.sa-scope[data-theme='dark'] .sa-bell-mark:hover { background: rgba(99, 102, 241, .16); }
+.sa-scope[data-theme='dark'] .sa-bell-row { border-bottom-color: #1e293b; }
+.sa-scope[data-theme='dark'] .sa-bell-row:hover { background: #1c2740; }
+.sa-scope[data-theme='dark'] .sa-bell-row.unread { background: rgba(99, 102, 241, .13); }
+.sa-scope[data-theme='dark'] .sa-bell-row.unread:hover { background: rgba(99, 102, 241, .2); }
+.sa-scope[data-theme='dark'] .sa-bell-body > span { color: #94a3b8; }
+.sa-scope[data-theme='dark'] .sa-bell-body small { color: #7c8aa0; }
+.sa-scope[data-theme='dark'] .sa-bell-empty { color: #94a3b8; }
+.sa-scope[data-theme='dark'] .sa-bell-panel > footer { border-top-color: #253048; }
+.sa-scope[data-theme='dark'] .sa-bell-panel > footer button { color: #a5b4fc; }
+
+/* Chime control and the visible read failure on the alerts panel. */
+.sa-scope[data-theme='dark'] .sa-bell-sound { color: #a5b4fc; }
+.sa-scope[data-theme='dark'] .sa-bell-sound:hover { background: rgba(99, 102, 241, .16); }
+.sa-scope[data-theme='dark'] .sa-bell-sound.is-muted { color: #64748b; }
+.sa-scope[data-theme='dark'] .sa-bell-retry { color: #a5b4fc; }

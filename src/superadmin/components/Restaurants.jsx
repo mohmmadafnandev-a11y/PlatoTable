@@ -1,18 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  AlertTriangle,
   Building2,
   Download,
   ExternalLink,
   Eye,
   Pause,
   Play,
-  QrCode,
   Settings2,
-  UtensilsCrossed,
+  Trash2,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { deleteRestaurant } from '../lib/api'
 import { logActivity, useRestaurants } from '../lib/data'
-import StripeSubscriptionLink from './StripeSubscriptionLink'
+import RestaurantMenuManager from './RestaurantMenuManager'
+import RestaurantOwnerCard from './RestaurantOwnerCard'
+import RestaurantQrManager from './RestaurantQrManager'
+import SubscriptionProgress from './SubscriptionProgress'
 import { STATUSES, dateTime, downloadCsv, money, plainNumber, shortDate } from '../lib/format'
 import { Card, EmptyState, Notice, SectionHead, Spinner, StatusBadge } from './ui'
 
@@ -86,12 +90,12 @@ function RestaurantRow({ restaurant, selected, onToggle, onOpen }) {
       <td className="p-4 text-slate-600">
         {restaurant.subscription?.plan_name || 'Custom'}
         <small className="mt-1 block text-xs text-slate-400">
-          {restaurant.subscription ? money(restaurant.subscription.amount, restaurant.subscription.currency) : 'Not configured'}
+          {restaurant.subscription ? money(restaurant.subscription.amount) : 'Not configured'}
         </small>
       </td>
       <td className="p-4 text-slate-600">{plainNumber(restaurant.qr_count)}</td>
       <td className="p-4 text-slate-600">{plainNumber(restaurant.menu_item_count)}</td>
-      <td className="p-4 text-slate-600">{money(restaurant.paid_total, restaurant.currency)}</td>
+      <td className="p-4 text-slate-600">{money(restaurant.paid_total)}</td>
       <td className="p-4 text-slate-500">{shortDate(restaurant.created_at)}</td>
       <td className="p-4 text-right">
         <button onClick={onOpen} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-white">View</button>
@@ -297,6 +301,228 @@ export function Restaurants({ navigate, profile }) {
   )
 }
 
+// Removing a restaurant.
+//
+// Two different intentions get one word in most panels — "delete" — and they
+// are not the same thing. Either the tenant should never have existed, in which
+// case the payment history is theirs too and goes with them; or the tenant is
+// finished while the money it paid is a fact about the platform, and scrapping
+// the revenue reports to remove a menu would be plainly wrong. The dialog asks
+// which, in those terms, and refuses to proceed until the operator has named the
+// restaurant by typing its subdomain.
+const DELETE_MODES = [
+  {
+    value: 'erase',
+    title: 'Delete everything',
+    detail: 'The restaurant and every row that belongs to it: menu, QR codes, uploaded images, its payment history, and the owner’s sign-in account. Nothing is kept.',
+  },
+  {
+    value: 'detach',
+    title: 'Delete the restaurant, keep its payment history',
+    detail: 'The restaurant and its own data are removed. The payments it made stay in the ledger, so revenue and the transactions list stay complete. The owner’s account is left alone.',
+  },
+]
+
+function DeleteRestaurant({ restaurant, onClose, onDeleted }) {
+  const [mode, setMode] = useState('')
+  const [typed, setTyped] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState(null)
+
+  useEffect(() => {
+    const onKey = (event) => { if (event.key === 'Escape' && !busy) onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [busy, onClose])
+
+  const confirmed = typed.trim().toLowerCase() === restaurant.subdomain
+
+  const submit = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const payload = await deleteRestaurant(restaurant.id, mode, typed)
+      setResult(payload)
+    } catch (failure) {
+      setError(failure.message)
+    }
+    setBusy(false)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-slate-900/50 p-4" role="presentation">
+      <div role="dialog" aria-modal="true" aria-labelledby="delete-restaurant-title" className="w-full max-w-xl rounded-xl bg-white p-6 shadow-2xl">
+        {result ? (
+          <>
+            <h2 id="delete-restaurant-title" className="text-xl font-semibold text-slate-900">Deleted {restaurant.name}</h2>
+            <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
+              <div><dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Menu items removed</dt><dd className="mt-1 text-slate-700">{plainNumber(result.removed?.menu_items)}</dd></div>
+              <div><dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">QR codes removed</dt><dd className="mt-1 text-slate-700">{plainNumber(result.removed?.qr_codes)}</dd></div>
+              <div><dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Images removed</dt><dd className="mt-1 text-slate-700">{plainNumber(result.removed?.menu_images)}</dd></div>
+              <div><dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">Payments kept</dt><dd className="mt-1 text-slate-700">{plainNumber(result.kept?.payments)}</dd></div>
+            </dl>
+            {result.warnings?.length > 0 && (
+              <div className="mt-5"><Notice tone="warning">{result.warnings.join(' ')}</Notice></div>
+            )}
+            <button onClick={() => onDeleted(restaurant)} className="mt-6 w-full rounded-lg bg-slate-900 px-4 py-3 text-sm font-semibold text-white">Back to restaurants</button>
+          </>
+        ) : (
+          <>
+            <div className="flex items-start gap-3">
+              <span className="grid h-10 w-10 flex-none place-items-center rounded-lg bg-red-50 text-red-600"><AlertTriangle size={20} /></span>
+              <div>
+                <h2 id="delete-restaurant-title" className="text-xl font-semibold text-slate-900">Delete {restaurant.name}?</h2>
+                <p className="mt-1 text-sm text-slate-500">The Safepay subscription is cancelled first, so a deleted restaurant is never left being billed.</p>
+              </div>
+            </div>
+
+            <fieldset className="mt-5 grid gap-3">
+              <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400">What should be removed</legend>
+              {DELETE_MODES.map((option) => (
+                <label key={option.value} className={`flex cursor-pointer gap-3 rounded-xl border p-4 transition ${mode === option.value ? 'border-red-300 bg-red-50/60' : 'border-slate-200 hover:border-slate-300'}`}>
+                  <input type="radio" name="delete-mode" value={option.value} checked={mode === option.value} onChange={() => setMode(option.value)} className="mt-1 h-4 w-4 accent-red-600" />
+                  <span>
+                    <strong className="block text-sm font-semibold text-slate-900">{option.title}</strong>
+                    <small className="mt-1 block text-sm text-slate-500">{option.detail}</small>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+
+            <label className="mt-5 grid gap-2 text-sm font-medium text-slate-700">
+              Type <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">{restaurant.subdomain}</code> to confirm
+              <input autoFocus value={typed} onChange={(event) => setTyped(event.target.value)} placeholder={restaurant.subdomain} className="h-11 rounded-lg border border-slate-300 px-3 text-sm outline-none focus:border-red-400 focus:ring-4 focus:ring-red-100" />
+            </label>
+
+            {error && <div className="mt-4"><Notice tone="danger">{error}</Notice></div>}
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button
+                disabled={!mode || !confirmed || busy}
+                onClick={submit}
+                className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-50"
+              >
+                <Trash2 size={16} />{busy ? 'Deleting…' : 'Delete restaurant'}
+              </button>
+              <button onClick={onClose} disabled={busy} className="rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">Cancel</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// The restaurant's own details, editable from the platform side.
+//
+// Name, phone, contact address and notes were read-only here, which meant a
+// restaurant that had moved premises, changed its phone number, or was recorded
+// under a typo could only be corrected by the restaurant itself — or by hand in
+// the database. These fields are the record the panel reasons about, so they are
+// edited where they are read.
+//
+// Deliberately not here: the subdomain. It is baked into the stored admin/user
+// URLs, the printed QR codes and the login path, so renaming it is a migration
+// rather than a form field.
+function RestaurantProfileCard({ restaurant, profile, onSaved }) {
+  const [form, setForm] = useState(() => ({
+    name: restaurant.name || '',
+    phone: restaurant.phone || '',
+    contact_email: restaurant.contact_email || '',
+    address: restaurant.address || '',
+    notes: restaurant.notes || '',
+  }))
+  const [saving, setSaving] = useState(false)
+  const [feedback, setFeedback] = useState(null)
+  const update = (patch) => setForm((current) => ({ ...current, ...patch }))
+
+  const dirty = form.name !== (restaurant.name || '')
+    || form.phone !== (restaurant.phone || '')
+    || form.contact_email !== (restaurant.contact_email || '')
+    || form.address !== (restaurant.address || '')
+    || form.notes !== (restaurant.notes || '')
+
+  const save = async (event) => {
+    event.preventDefault()
+    if (!form.name.trim()) return setFeedback({ tone: 'danger', text: 'A restaurant needs a name.' })
+    if (form.contact_email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.contact_email.trim())) {
+      return setFeedback({ tone: 'danger', text: 'That contact email does not look like an address.' })
+    }
+
+    setSaving(true)
+    setFeedback(null)
+    const { error } = await supabase
+      .from('restaurants')
+      .update({
+        name: form.name.trim(),
+        phone: form.phone.trim() || null,
+        contact_email: form.contact_email.trim() || null,
+        address: form.address.trim() || null,
+        notes: form.notes.trim() || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', restaurant.id)
+    setSaving(false)
+    if (error) return setFeedback({ tone: 'danger', text: error.message })
+
+    await logActivity({
+      superAdminId: profile?.id,
+      restaurantId: restaurant.id,
+      action: 'restaurant_updated',
+      details: { name: form.name.trim() },
+    })
+    setFeedback({ tone: 'success', text: 'Restaurant details saved.' })
+    onSaved?.()
+  }
+
+  const field = 'h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none focus:border-indigo-500'
+
+  return (
+    <Card className="p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="font-semibold text-slate-900">Restaurant details</h2>
+          <p className="mt-1 text-sm text-slate-500">What the panel knows about this restaurant. The subdomain is fixed — QR codes and sign-in links are built from it.</p>
+        </div>
+        <code className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs text-slate-600">/{restaurant.subdomain}</code>
+      </div>
+
+      {feedback && <div className="mt-5"><Notice tone={feedback.tone}>{feedback.text}</Notice></div>}
+
+      <form onSubmit={save} className="mt-5 grid gap-4 sm:grid-cols-2">
+        <label className="grid gap-2 text-sm font-medium text-slate-700">
+          Restaurant name
+          <input required value={form.name} onChange={(event) => update({ name: event.target.value })} className={field} />
+        </label>
+        <label className="grid gap-2 text-sm font-medium text-slate-700">
+          Phone
+          <input value={form.phone} onChange={(event) => update({ phone: event.target.value })} placeholder="Not supplied" className={field} />
+        </label>
+        <label className="grid gap-2 text-sm font-medium text-slate-700">
+          Customer contact email
+          <input type="email" value={form.contact_email} onChange={(event) => update({ contact_email: event.target.value })} placeholder="Show guests who need help" className={field} />
+        </label>
+        <label className="grid gap-2 text-sm font-medium text-slate-700">
+          Address
+          <input value={form.address} onChange={(event) => update({ address: event.target.value })} placeholder="Not supplied" className={field} />
+        </label>
+        <label className="grid gap-2 text-sm font-medium text-slate-700 sm:col-span-2">
+          Internal notes
+          <textarea rows="2" value={form.notes} onChange={(event) => update({ notes: event.target.value })} placeholder="Anything the next operator should know" className={`${field} h-auto py-2`} />
+        </label>
+        <p className="text-xs text-slate-400 sm:col-span-2">The owner signs in with <strong className="font-semibold text-slate-600">{restaurant.owner_email || 'no address on file'}</strong> — that lives on the Owner sign-in tab.</p>
+        <div className="flex gap-3 sm:col-span-2">
+          <button disabled={saving || !dirty} className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50">
+            {saving ? 'Saving…' : 'Save details'}
+          </button>
+          {dirty && <button type="button" onClick={() => setForm({ name: restaurant.name || '', phone: restaurant.phone || '', contact_email: restaurant.contact_email || '', address: restaurant.address || '', notes: restaurant.notes || '' })} className="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600">Reset</button>}
+        </div>
+      </form>
+    </Card>
+  )
+}
+
 function DetailRow({ label, children }) {
   return (
     <div>
@@ -324,10 +550,9 @@ export function RestaurantDetail({ navigate, id, profile }) {
   const restaurant = restaurants.find((item) => item.id === id)
   const [tab, setTab] = useState('overview')
   const [busy, setBusy] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [feedback, setFeedback] = useState(null)
 
-  const menu = useRestaurantChildren(id, 'menu_items', 'id, name, price, is_available, category_id', { column: 'name', ascending: true })
-  const tokens = useRestaurantChildren(id, 'qr_tokens', 'id, table_number, is_active, created_at', { column: 'table_number', ascending: true })
   const logs = useRestaurantChildren(id, 'activity_logs', 'id, action, details, created_at', { column: 'created_at', ascending: false })
 
   if (loading && !restaurant) return <Spinner label="Loading restaurant" />
@@ -339,6 +564,12 @@ export function RestaurantDetail({ navigate, id, profile }) {
       </section>
     )
   }
+
+  // The detail page is about a restaurant that no longer exists by the time the
+  // dialog closes, so the list is where the operator has to end up. The list
+  // loads its own data on mount, which reads the delete back out of the database
+  // rather than trusting the in-memory copy.
+  const leaveAfterDelete = () => { setDeleting(false); navigate('/restaurants') }
 
   const toggleActive = async () => {
     const suspended = restaurant.is_active !== false
@@ -354,7 +585,8 @@ export function RestaurantDetail({ navigate, id, profile }) {
     ['overview', 'Overview'],
     ['subscription', 'Subscription'],
     ['menu', `Menu (${plainNumber(restaurant.menu_item_count)})`],
-    ['qr', `QR codes (${plainNumber(restaurant.qr_count)})`],
+    ['qr', `Tables & QR (${plainNumber(restaurant.qr_count)})`],
+    ['owner', 'Owner sign-in'],
     ['activity', 'Activity'],
   ]
 
@@ -387,8 +619,24 @@ export function RestaurantDetail({ navigate, id, profile }) {
           <button disabled={busy} onClick={toggleActive} className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2.5 text-sm font-semibold text-white transition disabled:opacity-60 ${restaurant.is_active === false ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'}`}>
             {restaurant.is_active === false ? <><Play size={16} />Reactivate</> : <><Pause size={16} />Suspend</>}
           </button>
+          {/* Deletion is deliberately behind suspension. Deleting something that
+              is still serving menus to customers is a mistake made in one
+              click; requiring the suspend first means the operator has already
+              seen the restaurant go dark before it goes for good. */}
+          <button
+            disabled={restaurant.is_active !== false}
+            onClick={() => setDeleting(true)}
+            title={restaurant.is_active !== false ? 'Suspend the restaurant before deleting it' : `Delete ${restaurant.name}`}
+            className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+          >
+            <Trash2 size={16} />Delete
+          </button>
         </div>
       </div>
+
+      {deleting && (
+        <DeleteRestaurant restaurant={restaurant} onClose={() => setDeleting(false)} onDeleted={leaveAfterDelete} />
+      )}
 
       {feedback && <div className="mt-5"><Notice tone={feedback.tone}>{feedback.text}</Notice></div>}
 
@@ -406,18 +654,20 @@ export function RestaurantDetail({ navigate, id, profile }) {
 
       <div className="mt-5">
         {tab === 'overview' && (
+          <div className="grid gap-5">
+          <RestaurantProfileCard restaurant={restaurant} profile={profile} onSaved={reload} />
           <div className="grid gap-5 lg:grid-cols-3">
+            {/* Only what the details form above does not already show: the
+                owner address lives on the Owner sign-in tab, and everything
+                else is editable in the card above. */}
             <Card className="p-6 lg:col-span-2">
-              <h2 className="font-semibold text-slate-900">Restaurant overview</h2>
-              <dl className="mt-5 grid gap-5 sm:grid-cols-2">
+              <h2 className="font-semibold text-slate-900">Record</h2>
+              <dl className="mt-5 grid gap-5 sm:grid-cols-3">
                 <DetailRow label="Owner email">{restaurant.owner_email || 'Not supplied'}</DetailRow>
-                <DetailRow label="Contact email">{restaurant.contact_email || 'Not supplied'}</DetailRow>
-                <DetailRow label="Phone">{restaurant.phone || 'Not supplied'}</DetailRow>
                 <DetailRow label="Country">{restaurant.country || 'Not supplied'}</DetailRow>
-                <DetailRow label="Currency">{restaurant.currency || 'PKR'}</DetailRow>
                 <DetailRow label="Joined">{shortDate(restaurant.created_at)}</DetailRow>
-                <DetailRow label="Address">{restaurant.address || 'Not supplied'}</DetailRow>
-                <DetailRow label="Internal notes">{restaurant.notes || 'None'}</DetailRow>
+                <DetailRow label="Billing currency">{restaurant.currency || 'USD'}</DetailRow>
+                <DetailRow label="Onboarding">{restaurant.onboarding_completed ? 'Complete' : 'Incomplete'}</DetailRow>
               </dl>
             </Card>
             <Card className="p-6">
@@ -426,20 +676,25 @@ export function RestaurantDetail({ navigate, id, profile }) {
                 <DetailRow label="QR codes">{plainNumber(restaurant.qr_count)}</DetailRow>
                 <DetailRow label="Menu items">{plainNumber(restaurant.menu_item_count)}</DetailRow>
                 <DetailRow label="Categories">{plainNumber(restaurant.category_count)}</DetailRow>
-                <DetailRow label="Collected">{money(restaurant.paid_total, restaurant.currency)}</DetailRow>
+                <DetailRow label="Collected">{money(restaurant.paid_total)}</DetailRow>
               </dl>
             </Card>
+          </div>
           </div>
         )}
 
         {tab === 'subscription' && (
+          <>
+            {/* Which part of the billing cycle this restaurant is in, and what
+                it is charged next — the question this tab is opened to answer. */}
+            {restaurant.subscription && <SubscriptionProgress subscription={restaurant.subscription} className="mb-5" />}
           <Card className="p-6">
             <h2 className="font-semibold text-slate-900">Subscription</h2>
             {restaurant.subscription ? (
               <dl className="mt-5 grid gap-5 sm:grid-cols-2">
                 <DetailRow label="Status"><StatusBadge status={restaurant.subscription.status} /></DetailRow>
                 <DetailRow label="Plan">{restaurant.subscription.plan_name || 'Custom plan'}</DetailRow>
-                <DetailRow label="Recurring amount">{money(restaurant.subscription.amount, restaurant.subscription.currency)}</DetailRow>
+                <DetailRow label="Recurring amount">{money(restaurant.subscription.amount)}</DetailRow>
                 <DetailRow label="Last payment">{restaurant.subscription.last_payment_status || '—'}</DetailRow>
                 <DetailRow label="Trial ends">{restaurant.subscription.trial_end ? dateTime(restaurant.subscription.trial_end) : '—'}</DetailRow>
                 <DetailRow label="Period ends">{restaurant.subscription.current_period_end ? dateTime(restaurant.subscription.current_period_end) : '—'}</DetailRow>
@@ -448,59 +703,19 @@ export function RestaurantDetail({ navigate, id, profile }) {
             ) : <p className="mt-4 text-sm text-slate-500">This restaurant has no subscription row yet.</p>}
             <div className="mt-6 flex flex-wrap items-center gap-4">
               <button onClick={() => navigate(`/subscriptions/${restaurant.subscription?.id}`)} className="text-sm font-semibold text-indigo-600">Manage subscription →</button>
-              <StripeSubscriptionLink restaurantId={restaurant.id} onLinked={reload} />
             </div>
           </Card>
+          </>
         )}
 
-        {tab === 'menu' && (
-          <Card className="overflow-hidden p-0">
-            {menu.loading
-              ? <Spinner label="Loading menu" />
-              : menu.rows.length
-                ? (
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                      <tr><th className="p-4 font-semibold">Item</th><th className="p-4 font-semibold">Price</th><th className="p-4 font-semibold">Available</th></tr>
-                    </thead>
-                    <tbody>
-                      {menu.rows.map((item) => (
-                        <tr key={item.id} className="border-t border-slate-100">
-                          <td className="p-4 font-medium text-slate-800">{item.name}</td>
-                          <td className="p-4 text-slate-600">{money(item.price, restaurant.currency)}</td>
-                          <td className="p-4">{item.is_available ? <span className="text-emerald-600">Yes</span> : <span className="text-red-600">Sold out</span>}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )
-                : <EmptyState icon={UtensilsCrossed} title="No menu items yet" description="This restaurant has not added anything to its menu." />}
-          </Card>
-        )}
+        {tab === 'menu' && <RestaurantMenuManager restaurant={restaurant} profile={profile} />}
 
-        {tab === 'qr' && (
-          <Card className="overflow-hidden p-0">
-            {tokens.loading
-              ? <Spinner label="Loading QR codes" />
-              : tokens.rows.length
-                ? (
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                      <tr><th className="p-4 font-semibold">Table</th><th className="p-4 font-semibold">Active</th><th className="p-4 font-semibold">Created</th></tr>
-                    </thead>
-                    <tbody>
-                      {tokens.rows.map((token) => (
-                        <tr key={token.id} className="border-t border-slate-100">
-                          <td className="p-4 font-medium text-slate-800">{token.table_number || 'Unassigned'}</td>
-                          <td className="p-4">{token.is_active ? <span className="text-emerald-600">Active</span> : <span className="text-slate-500">Inactive</span>}</td>
-                          <td className="p-4 text-slate-500">{shortDate(token.created_at)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )
-                : <EmptyState icon={QrCode} title="No QR codes yet" description="This restaurant has not generated any table codes." />}
-          </Card>
+        {tab === 'qr' && <RestaurantQrManager restaurant={restaurant} profile={profile} />}
+
+        {/* The owner's way in, editable from the platform side — the support
+            call that used to end in "ask them to use forgot password". */}
+        {tab === 'owner' && (
+          <RestaurantOwnerCard restaurant={restaurant} onChanged={reload} />
         )}
 
         {tab === 'activity' && (

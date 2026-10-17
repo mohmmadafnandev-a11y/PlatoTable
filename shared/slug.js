@@ -80,21 +80,24 @@ export function suggestPassword(length = 16) {
   return [...bytes].map((byte) => alphabet[byte % alphabet.length]).join('')
 }
 
-// Currency is offered per market. GBP and SAR restaurants can be onboarded, but
-// a plan must carry an explicit price for the chosen currency: the pricing RPC
-// refuses to guess rather than silently billing a different market's amount.
-export const CURRENCIES = ['PKR', 'USD', 'AED', 'GBP', 'SAR']
+// One currency, everywhere: the platform is priced, billed, and reported in
+// Pakistani rupees, on both panels and on the public page — the money is taken
+// by Safepay, which is a Pakistani gateway. Restaurants are onboarded in
+// different countries, not in different currencies — a second currency allowed a
+// plan to be read in one figure and billed in another, and it is deliberately
+// unrepresentable now.
+export const CURRENCY = 'PKR'
+export const CURRENCIES = [CURRENCY]
 
+// Country is still collected: it says which market a restaurant trades in, and
+// it is what the directory's country filter groups by. It no longer decides a
+// billing currency.
 export const COUNTRIES = [
-  { code: 'PK', name: 'Pakistan', currency: 'PKR' },
-  { code: 'AE', name: 'United Arab Emirates', currency: 'AED' },
-  { code: 'SA', name: 'Saudi Arabia', currency: 'SAR' },
-  { code: 'GB', name: 'United Kingdom', currency: 'GBP' },
-  { code: 'INTL', name: 'International', currency: 'USD' },
+  { code: 'PK', name: 'Pakistan' },
+  { code: 'AE', name: 'United Arab Emirates' },
+  { code: 'SA', name: 'Saudi Arabia' },
+  { code: 'GB', name: 'United Kingdom' },
+  { code: 'INTL', name: 'International' },
 ]
 
 export const COUNTRY_CODES = COUNTRIES.map((country) => country.code)
-
-export function currencyForCountry(code) {
-  return COUNTRIES.find((country) => country.code === code)?.currency || 'USD'
-}

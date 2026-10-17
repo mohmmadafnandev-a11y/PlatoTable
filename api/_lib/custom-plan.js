@@ -1,30 +1,29 @@
-import { CURRENCIES, CUSTOM_INTERVAL, PRICE_COLUMNS, customPlanError, customPlanName, planDurationDays } from '../../shared/plans.js'
-import { syncSavedPlan } from './stripe-plans.js'
+import { CURRENCY, CUSTOM_INTERVAL, PRICE_COLUMNS, customPlanError, customPlanName, planDurationDays, withLegacyPricesZeroed } from '../../shared/plans.js'
+import { syncSavedPlan } from './safepay-plans.js'
 
 // A plan sized for one restaurant.
 //
 // Not every restaurant should be pushed onto a catalogue plan. A five-table cafe
-// that wants "90 days for PKR 5,000, no trial" is a real deal, and forcing it
+// that wants "90 days for Rs 45,000, no trial" is a real deal, and forcing it
 // into a monthly plan means either losing the sale or inventing a catalogue plan
 // nobody else will ever buy. This creates that plan, keeps it out of the public
-// catalogue (`is_custom` / `is_public`), and puts it in Stripe so the restaurant
-// can still subscribe to it with a card.
+// catalogue (`is_custom` / `is_public`), and mirrors it into Safepay so the
+// restaurant can still subscribe to it.
 //
 // The plan is created by the onboarding handler, which runs with the service
 // role, so it is never reachable from a browser session.
 
 /**
- * Writes the bespoke plan and mirrors it into Stripe.
+ * Writes the bespoke plan and mirrors it into Safepay.
  *
- * Returns the saved row. The Stripe half is reported, not thrown: a plan the
- * operator typed must not be lost because Stripe was unreachable, and
- * `stripe_sync_error` is what tells them to re-sync it.
+ * Returns the saved row. The Safepay half is reported, not thrown: a plan the
+ * operator typed must not be lost because Safepay was unreachable, and
+ * `safepay_sync_error` is what tells them to re-sync it.
  */
 export async function createCustomPlan(admin, { restaurantName, currency, days, price, trialDays }) {
   const problem = customPlanError({ days, price, trialDays, currency })
   if (problem) return { error: problem }
 
-  const code = String(currency).toUpperCase()
   const period = Number(days)
   const trial = Number(trialDays) || 0
 
@@ -55,16 +54,16 @@ export async function createCustomPlan(admin, { restaurantName, currency, days, 
     features: [],
   }
 
-  // The three NOT NULL price columns must all carry a value, but `0` is the
-  // honest one for a currency this plan is not sold in: `resolvePlanPrice`
-  // treats a zero as "not priced here" and refuses rather than charging nothing.
-  // Leaving the column's default (19 USD) would silently sell the plan in
-  // dollars.
-  for (const item of CURRENCIES) record[PRICE_COLUMNS[item]] = item === code ? Number(price) : 0
+  // The other price columns are NOT NULL and must carry a value, but `0` is the
+  // honest one for a currency this plan is not sold in: `resolvePlanPrice` treats
+  // a zero as "not priced here" and refuses rather than charging nothing. Leaving
+  // a column's default would silently sell the plan at a figure nobody chose.
+  record[PRICE_COLUMNS[CURRENCY]] = Number(price)
+  withLegacyPricesZeroed(record)
 
   const { data: saved, error } = await admin.from('subscription_plans').insert(record).select('*').single()
   if (error) return { error: error.code === '23505' ? 'A plan with this name already exists.' : error.message }
 
   const { plan, report } = await syncSavedPlan(admin, saved)
-  return { plan, stripe: report }
+  return { plan, safepay: report }
 }

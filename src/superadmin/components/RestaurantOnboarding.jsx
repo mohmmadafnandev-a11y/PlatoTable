@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { COUNTRIES, CURRENCIES, PASSWORD_MIN, currencyForCountry, passwordError, slugError, slugify, suggestPassword } from '../../../shared/slug.js'
+import { COUNTRIES, CURRENCY, PASSWORD_MIN, passwordError, slugError, slugify, suggestPassword } from '../../../shared/slug.js'
 import { customPlanError, intervalLabel, intervalUnit, resolvePlanPrice } from '../../../shared/plans.js'
 import { money } from '../lib/format'
 import { supabase } from '../lib/supabase'
@@ -12,8 +12,11 @@ const initialForm = {
   ownerPassword: '',
   phone: '',
   country: 'PK',
-  currency: 'PKR',
   planId: '',
+  // One trial decision, asked once, whichever kind of plan is chosen. The days
+  // are only a number once the trial is actually on, which is why `trialOn`
+  // exists rather than treating 0 days as "no trial".
+  trialOn: true,
   trialDays: '7',
   customDomain: '',
   notes: '',
@@ -25,13 +28,17 @@ const labelClass = 'grid gap-2 text-sm font-medium text-slate-700'
 export default function RestaurantOnboarding({ navigate }) {
   const [form, setForm] = useState(initialForm)
   const [plans, setPlans] = useState([])
-  const [mode, setMode] = useState('trial')
   // A restaurant can be put on a catalogue plan, on a bespoke plan sized here, or
   // on nothing yet. `custom` holds the bespoke values so switching back and forth
-  // between the two modes does not lose what was typed.
+  // between the two modes does not lose what was typed. The trial is not in here:
+  // it belongs to the restaurant, not to the plan, so it is answered once.
   const [planMode, setPlanMode] = useState('catalogue')
-  const [custom, setCustom] = useState({ days: '30', price: '', trialOn: true, trialDays: '7' })
+  const [custom, setCustom] = useState({ days: '30', price: '' })
   const setCustomField = (field) => (event) => setCustom((current) => ({ ...current, [field]: event.target.value }))
+  const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }))
+  // What the server will be told about the trial. 0 means "no trial", and the
+  // account is then created suspended until a paid subscription is attached.
+  const trialDays = form.trialOn ? Number(form.trialDays) : 0
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState('')
   const [slugEdited, setSlugEdited] = useState(false)
@@ -44,11 +51,25 @@ export default function RestaurantOnboarding({ navigate }) {
   useEffect(() => {
     if (!supabase) return
     // Only active plans can be chosen, and the interval matters here: a yearly
-    // plan must not be shown as if it billed monthly.
+    // plan must not be shown as if it billed monthly. A plan is priced in one
+    // currency, so there is one price column to read.
     supabase.from('subscription_plans')
-      .select('id, name, trial_days, duration_days, interval, interval_count, price_pkr, price_usd, price_aed, price_gbp, price_sar, stripe_price_usd, stripe_price_aed, stripe_price_pkr, stripe_price_gbp, stripe_price_sar')
-      .eq('is_active', true).order('interval').order('name')
+      .select('id, name, trial_days, duration_days, interval, interval_count, price_pkr')
+      .eq('is_active', true).eq('is_public', true).order('interval').order('name')
       .then(({ data }) => setPlans(data || []))
+  }, [])
+
+  // The platform's default trial length seeds the field, so an operator who has
+  // set a house default does not retype it on every restaurant. Seeded only while
+  // the field still holds the initial value: a number already typed here wins.
+  useEffect(() => {
+    if (!supabase) return
+    supabase.from('platform_settings').select('default_trial_days').maybeSingle().then(({ data }) => {
+      if (data?.default_trial_days === null || data?.default_trial_days === undefined) return
+      setForm((current) => (current.trialDays === initialForm.trialDays
+        ? { ...current, trialDays: String(data.default_trial_days) }
+        : current))
+    })
   }, [])
 
   // The suggestion stops following the name once the subdomain is typed by
@@ -65,19 +86,19 @@ export default function RestaurantOnboarding({ navigate }) {
   // Validated with the same function the server uses, so a bespoke plan the form
   // accepts can never be refused after the owner's account already exists.
   const customProblem = planMode === 'custom'
-    ? customPlanError({ days: Number(custom.days), price: Number(custom.price), trialDays: custom.trialOn ? Number(custom.trialDays) : 0, currency: form.currency })
+    ? customPlanError({ days: Number(custom.days), price: Number(custom.price), trialDays, currency: CURRENCY })
     : ''
   const customTotal = Number(custom.price) > 0 && Number(custom.days) > 0
-    ? `Charges ${custom.price} ${form.currency} every ${custom.days} day${Number(custom.days) === 1 ? '' : 's'}${custom.trialOn ? `, after a ${custom.trialDays} day free trial` : ', with no free trial'}.`
+    ? `Charges ${money(Number(custom.price), CURRENCY)} every ${custom.days} day${Number(custom.days) === 1 ? '' : 's'}${form.trialOn ? `, after a ${form.trialDays} day free trial` : ', with no free trial'}.`
     : ''
   // One resolver shared with the checkout endpoint, so the price shown here is
   // the price that will be charged rather than a second guess at it.
-  const priced = selectedPlan ? resolvePlanPrice(selectedPlan, form.currency) : null
+  const priced = selectedPlan ? resolvePlanPrice(selectedPlan, CURRENCY) : null
 
-  // A plan that has no price for this currency is refused by the database, so
-  // it is surfaced here instead of failing after the owner account is created.
+  // A plan with no rupee price is refused by the database, so it is surfaced
+  // here instead of failing after the owner account is created.
   const pricingProblem = selectedPlan && !priced
-    ? `The ${selectedPlan.name} plan has no ${form.currency} price yet. Add one in Plans & pricing, choose another currency, or onboard with no plan.`
+    ? `The ${selectedPlan.name} plan has no ${CURRENCY} price yet. Add one in Plans & pricing, or onboard with no plan.`
     : ''
 
   const canSubmit = useMemo(() => Boolean(
@@ -99,17 +120,19 @@ export default function RestaurantOnboarding({ navigate }) {
     const payload = {
       ...form,
       subdomain,
+      currency: CURRENCY,
       customDomain: form.customDomain.trim().toLowerCase(),
       planId: planMode === 'catalogue' ? (form.planId || null) : null,
-      trialDays: mode === 'trial' ? Number(form.trialDays) : 0,
+      trialDays,
       // Sent instead of a catalogue plan id. The server creates the plan in
-      // Stripe and hands its id to the onboarding transaction, so a restaurant
-      // can be invoiced for it immediately.
+      // Safepay and hands its id to the onboarding transaction, so a restaurant
+      // can be billed for it immediately. The trial is the same decision
+      // either way, so it is carried on both.
       customPlan: planMode === 'custom' ? {
         days: Number(custom.days),
         price: Number(custom.price),
-        trialDays: custom.trialOn ? Number(custom.trialDays) : 0,
-        currency: form.currency,
+        trialDays,
+        currency: CURRENCY,
       } : null,
     }
     try {
@@ -146,7 +169,7 @@ export default function RestaurantOnboarding({ navigate }) {
         <legend className="mb-3 font-semibold">Restaurant and owner</legend>
 
         <label className={labelClass}>Restaurant name
-          <input required value={form.name} onChange={setName} placeholder="DayNight" className={inputClass} />
+          <input required value={form.name} onChange={setName} placeholder="Spice Garden" className={inputClass} />
         </label>
 
         <label className={labelClass}>Subdomain
@@ -154,7 +177,7 @@ export default function RestaurantOnboarding({ navigate }) {
             required
             value={form.subdomain}
             onChange={(event) => { setSlugEdited(true); setForm((current) => ({ ...current, subdomain: slugify(event.target.value) || event.target.value.toLowerCase() })) }}
-            placeholder="daynight"
+            placeholder="spice-garden"
             aria-invalid={Boolean(slugProblem)}
             aria-describedby="slug-help"
             className={`${inputClass} ${slugProblem ? 'border-red-300 focus:border-red-500 focus:ring-red-100' : ''}`}
@@ -169,7 +192,7 @@ export default function RestaurantOnboarding({ navigate }) {
         </label>
 
         <label className={labelClass}>Owner email
-          <input required type="email" value={form.ownerEmail} onChange={set('ownerEmail')} placeholder="owner@daynight.com" className={inputClass} />
+          <input required type="email" value={form.ownerEmail} onChange={set('ownerEmail')} placeholder="owner@restaurant.com" className={inputClass} />
         </label>
 
         <label className={`${labelClass} sm:col-span-2`}>Owner password
@@ -198,7 +221,7 @@ export default function RestaurantOnboarding({ navigate }) {
         <label className={labelClass}>Country
           <select
             value={form.country}
-            onChange={(event) => setForm((current) => ({ ...current, country: event.target.value, currency: currencyForCountry(event.target.value) }))}
+            onChange={set('country')}
             className={`${inputClass} bg-white`}
           >
             {COUNTRIES.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}
@@ -209,11 +232,9 @@ export default function RestaurantOnboarding({ navigate }) {
       <fieldset className="grid gap-4 sm:grid-cols-2">
         <legend className="mb-3 font-semibold">Subscription</legend>
 
-        <label className={labelClass}>Currency
-          <select value={form.currency} onChange={set('currency')} className={`${inputClass} bg-white`}>
-            {CURRENCIES.map((code) => <option key={code} value={code}>{code}</option>)}
-          </select>
-          <small className="text-slate-500">Defaults to the country’s currency. Change it if you bill in another.</small>
+        <label className={labelClass}>Billing currency
+          <input value={CURRENCY} readOnly disabled className={`${inputClass} bg-slate-100 text-slate-500`} />
+          <small className="text-slate-500">Every plan, invoice, and report is in dollars.</small>
         </label>
 
         <div className="sm:col-span-2">
@@ -234,37 +255,41 @@ export default function RestaurantOnboarding({ navigate }) {
               <input required type="number" min="1" max="365" value={custom.days} onChange={setCustomField('days')} className={inputClass} />
               <small className="font-normal text-slate-500">What one payment covers — 30 for a month, 365 for a year.</small>
             </span>
-            <span className="grid gap-2 text-sm font-medium text-slate-700">Price per period ({form.currency})
-              <input required type="number" min="1" step="0.01" value={custom.price} onChange={setCustomField('price')} placeholder="5000" className={inputClass} />
-              <small className="font-normal text-slate-500">Saved as a hidden plan and created in Stripe test mode at this price.</small>
+            <span className="grid gap-2 text-sm font-medium text-slate-700">Price per period ({CURRENCY})
+              <input required type="number" min="1" step="0.01" value={custom.price} onChange={setCustomField('price')} placeholder="2000" className={inputClass} />
+              <small className="font-normal text-slate-500">Saved as a hidden plan and mirrored into Safepay at this price.</small>
             </span>
-            <span className="grid gap-2 text-sm font-medium text-slate-700 sm:col-span-2">Free trial
-              <span className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => setCustom((current) => ({ ...current, trialOn: true }))} className={`rounded-lg px-3 py-2 text-sm font-semibold ${custom.trialOn ? 'bg-indigo-600 text-white' : 'border border-slate-200 bg-white text-slate-600'}`}>With a free trial</button>
-                <button type="button" onClick={() => setCustom((current) => ({ ...current, trialOn: false }))} className={`rounded-lg px-3 py-2 text-sm font-semibold ${custom.trialOn ? 'border border-slate-200 bg-white text-slate-600' : 'bg-indigo-600 text-white'}`}>No trial</button>
-              </span>
-            </span>
-            {custom.trialOn && <span className="grid gap-2 text-sm font-medium text-slate-700">Free trial days
-              <input required type="number" min="1" max="365" value={custom.trialDays} onChange={setCustomField('trialDays')} className={inputClass} />
-            </span>}
             <p className={`sm:col-span-2 text-sm ${customProblem ? 'text-red-600' : 'text-slate-600'}`}>{customProblem || customTotal || 'Enter a billing period and a price.'}</p>
           </span>}
           {planMode === 'catalogue' && selectedPlan && <small className={pricingProblem ? 'text-amber-700' : 'text-slate-500'}>
-            {pricingProblem || `${money(priced.amount, priced.currency)} per ${intervalUnit(selectedPlan)} · ${selectedPlan.trial_days} day trial · ${selectedPlan.duration_days} day cycle`}
+            {pricingProblem || `${money(priced.amount, CURRENCY)} per ${intervalUnit(selectedPlan)} · ${selectedPlan.trial_days} day trial in the plan · ${selectedPlan.duration_days} day cycle`}
           </small>}
         </label>
 
-        <div className="sm:col-span-2">
-          <p className="mb-2 text-sm font-medium text-slate-700">Starting access</p>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => setMode('trial')} className={`rounded-lg px-3 py-2 text-sm font-semibold ${mode === 'trial' ? 'bg-indigo-600 text-white' : 'border border-slate-200 text-slate-600'}`}>Start free trial</button>
-            <button type="button" onClick={() => setMode('payment')} className={`rounded-lg px-3 py-2 text-sm font-semibold ${mode === 'payment' ? 'bg-indigo-600 text-white' : 'border border-slate-200 text-slate-600'}`}>Payment pending</button>
+        {/* One trial decision, asked once, for either kind of plan. Turning it on
+            reveals the length; turning it off hides the field, because a trial
+            that is not being given has no length to enter. */}
+        <div className="rounded-xl border border-slate-200 p-4 sm:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-800">Free trial</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {form.trialOn
+                  ? 'Full access before the first payment. Safepay is told the length when the restaurant adds a card.'
+                  : 'No trial. The account is created suspended and stays that way until a paid subscription is attached.'}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Free trial">
+              <button type="button" aria-pressed={form.trialOn} onClick={() => setField('trialOn', true)} className={`rounded-lg px-3 py-2 text-sm font-semibold ${form.trialOn ? 'bg-indigo-600 text-white' : 'border border-slate-200 bg-white text-slate-600'}`}>Trial on</button>
+              <button type="button" aria-pressed={!form.trialOn} onClick={() => setField('trialOn', false)} className={`rounded-lg px-3 py-2 text-sm font-semibold ${form.trialOn ? 'border border-slate-200 bg-white text-slate-600' : 'bg-indigo-600 text-white'}`}>Trial off</button>
+            </div>
           </div>
-          {mode === 'trial'
-            ? <label className="mt-3 grid max-w-xs gap-2 text-sm font-medium text-slate-700">Free trial days
-                <input required type="number" min="1" max="365" value={form.trialDays} onChange={set('trialDays')} className={inputClass} />
-              </label>
-            : <p className="mt-3 text-sm text-amber-700">This account stays suspended until you attach a paid Stripe subscription from its restaurant page. A free trial is permanently unavailable after this choice.</p>}
+          {form.trialOn && (
+            <label className="mt-4 grid max-w-xs gap-2 text-sm font-medium text-slate-700">Trial length (days)
+              <input required type="number" min="1" max="365" value={form.trialDays} onChange={set('trialDays')} className={inputClass} />
+              <small className="font-normal text-slate-500">Counted from the moment this restaurant is created.</small>
+            </label>
+          )}
         </div>
       </fieldset>
 
@@ -319,7 +344,7 @@ function Handover({ result, navigate, onReset, copy, copied }) {
         {links.admin && <LinkRow label="Restaurant admin" value={links.admin} copyKey="admin" copy={copy} copied={copied} />}
         {links.menu && <LinkRow label="Customer menu" value={links.menu} copyKey="menu" copy={copy} copied={copied} />}
         {links.customDomain && <p className="text-sm text-slate-600">Custom domain: <strong className="font-semibold">{links.customDomain}</strong> — add its DNS record before sharing it.</p>}
-        {!links.admin && !links.menu && <p className="text-sm text-amber-700">No base URL is configured for this deployment, so tenant links were not generated. Set VITE_CANONICAL_BASE_URL and create the restaurant’s URLs from its detail page.</p>}
+        {!links.admin && !links.menu && <p className="text-sm text-amber-700">This request carried no host, so tenant links could not be generated. Open the restaurant’s detail page to create its URLs.</p>}
       </div>
 
       <div className="mt-8 flex flex-wrap gap-3">

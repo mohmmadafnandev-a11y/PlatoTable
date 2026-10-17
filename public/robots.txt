@@ -1,0 +1,7 @@
+# The marketing page is public; the staff panels, table menus and API are not
+# something search engines should hold on to.
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /scan/
+Disallow: /api/

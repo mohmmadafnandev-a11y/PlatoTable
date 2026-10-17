@@ -1,7 +1,6 @@
-import { createClient } from '@supabase/supabase-js'
+import { withinRateLimit } from '../_lib/rate-limit.js'
 import { passwordError, suggestPassword } from '../../shared/slug.js'
-
-const admin = createClient(process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+import { admin } from '../_lib/admin.js'
 
 const ROLES = ['super_admin', 'support', 'billing']
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -46,6 +45,9 @@ export default async function handler(request, response) {
 
   const caller = await requireSuperAdmin(request)
   if (!caller) return response.status(403).json({ error: 'Only an active Super Admin can manage the team.' })
+
+  // Inviting creates an Auth user with a working password; removing deletes one.
+  if (!(await withinRateLimit(request, response, { route: 'team-invite', max: 30, actorId: caller.user_id }))) return
 
   const body = request.body || {}
   const action = body.action === 'remove' ? 'remove' : 'invite'

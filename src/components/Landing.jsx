@@ -104,8 +104,8 @@ const FEATURES = [
   },
   {
     icon: Globe2,
-    title: 'Priced in your currency',
-    body: 'Pakistani rupees, dirhams, dollars, pounds, or riyals — the menu shows prices the way your guests expect.',
+    title: 'One price, one currency',
+    body: 'Menu prices, plan prices, and invoices are all in US dollars, so the figure you set is the figure you are paid.',
   },
 ]
 
@@ -113,7 +113,7 @@ const PRICING = [
   '7 days free — full access, no card required',
   'Unlimited tables, QR codes, and menu items',
   'Offers, categories, and live table monitoring',
-  'Billing starts after the trial, cancel any time',
+  'One flat price in US dollars, after the trial',
 ]
 
 function useScrollReveal(rootRef) {
@@ -305,8 +305,8 @@ export default function Landing() {
             <div className="lp-price-card lp-reveal">
               <div>
                 <span className="lp-price-tag">Standard plan</span>
-                <div className="lp-price-amount"><strong>$19</strong><span>per month</span></div>
-                <p className="lp-price-alt">Also billed as around AED 79 or PKR 2,000. No setup fee, cancel whenever you like.</p>
+                <div className="lp-price-amount"><strong>$25</strong><span>per month</span></div>
+                <p className="lp-price-alt">Billed in US dollars — $25 a month, or $250 a year. No setup fee, cancel whenever you like.</p>
               </div>
               <ul className="lp-price-list">
                 {PRICING.map((line) => (

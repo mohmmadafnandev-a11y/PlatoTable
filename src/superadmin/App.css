@@ -1,9 +1,44 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-.login-glow { background: radial-gradient(circle at 18% 12%, rgba(99,102,241,.35), transparent 29%), radial-gradient(circle at 82% 78%, rgba(16,185,129,.18), transparent 32%), #0f172a; }
-.login-art { background: radial-gradient(circle at 70% 20%, rgba(129,140,248,.65), transparent 22%), linear-gradient(145deg, #111c38 0%, #172554 51%, #0f766e 100%); }
-.login-art::before { content: ''; position: absolute; inset: 13%; border: 1px solid rgba(255,255,255,.14); border-radius: 32px; transform: rotate(-8deg); }
-.login-art::after { content: ''; position: absolute; width: 19rem; height: 19rem; right: -4rem; bottom: -5rem; border: 44px solid rgba(255,255,255,.1); border-radius: 50%; }
+/* Super Admin sign-in ------------------------------------------------------
+ *
+ * Matched to the platform landing page, because it is the first screen anyone
+ * sees: the same cream page, the same warm hairline (#e5dfd5), the same brick
+ * accent (#a8451f), and Playfair Display for the two headings. It used to be a
+ * dark indigo panel, which made the platform look like two products depending
+ * on which URL you opened.
+ *
+ * Light in dark mode too, deliberately. A sign-in screen that changes colour
+ * with a stored preference is a screen that tells an observer whether this
+ * browser has signed in before.
+ */
+.sa-login-page {
+  background: radial-gradient(circle at 12% 6%, rgba(168, 69, 31, .07), transparent 34%),
+              radial-gradient(circle at 88% 94%, rgba(168, 69, 31, .05), transparent 30%),
+              #f3f0ea;
+}
+
+.sa-login-card { border: 1px solid #e5dfd5; }
+
+/* The text panel: tinted paper rather than a photograph, so it still reads at
+   any width and needs no image to load. */
+.sa-login-art { background: linear-gradient(152deg, #fdf1ea 0%, #f8f4ee 48%, #ffffff 100%); }
+.sa-login-art::before { content: ''; position: absolute; inset: 13%; border: 1px solid rgba(168, 69, 31, .14); border-radius: 32px; transform: rotate(-8deg); }
+.sa-login-art::after { content: ''; position: absolute; width: 19rem; height: 19rem; right: -4rem; bottom: -5rem; border: 44px solid rgba(168, 69, 31, .07); border-radius: 50%; }
+
+.sa-login-display { font-family: 'Playfair Display', serif; font-weight: 600; letter-spacing: -.03em; color: #1b1a18; }
+.sa-login-display em { font-style: italic; color: #a8451f; }
+.sa-login-kicker { color: #a8451f; letter-spacing: .2em; }
+
+.sa-login-field { border: 1px solid #e5dfd5; background: #fff; color: #1b1a18; outline: none; }
+.sa-login-field:focus { border-color: #a8451f; box-shadow: 0 0 0 4px #fdf1ea; }
+
+.sa-login-submit { background: #1b1a18; color: #fff; box-shadow: 0 8px 22px -12px rgba(27, 26, 24, .8); }
+.sa-login-submit:hover { background: #000; }
+
+.sa-login-link { color: #a8451f; }
+.sa-login-link:hover { color: #83330f; }
+.sa-login-check { border-color: #cfc7bb; accent-color: #a8451f; }
 .shell-gradient { background: radial-gradient(circle at 80% -15%, rgba(99,102,241,.11), transparent 28%), #f8fafc; }
 .nav-link { color: #64748b; transition: color .15s ease, background-color .15s ease, transform .15s ease, border-color .15s ease; }
 .nav-link:hover { color: #3730a3; background: #eef2ff; }
@@ -114,6 +149,127 @@
   to { opacity: 1; transform: translateY(-50%) translateX(0); }
 }
 
+/* Header notification bell.
+ *
+ * This was a button with a hardcoded red dot and no click handler, so it looked
+ * like something needed attention and could never be opened. The panel below is
+ * anchored to the bell and follows the collapsible-sidebar rules: it is pinned
+ * to the right edge of the viewport, so it never collides with the rail. */
+.sa-bell { position: relative; }
+
+.sa-bell-button {
+  position: relative;
+  display: grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  place-items: center;
+  border-radius: 999px;
+  color: #475569;
+  transition: color .15s ease, background-color .15s ease;
+}
+
+.sa-bell-button:hover { background: #f1f5f9; }
+.sa-bell-button[aria-expanded='true'] { background: #f1f5f9; }
+
+.sa-bell-badge {
+  position: absolute;
+  top: .22rem;
+  right: .18rem;
+  min-width: 1.08rem;
+  padding: 0 .26rem;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: .63rem;
+  font-weight: 700;
+  line-height: 1.12rem;
+  text-align: center;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.sa-bell-panel {
+  position: absolute;
+  top: calc(100% + .55rem);
+  right: 0;
+  z-index: 30;
+  width: min(23.5rem, calc(100vw - 2rem));
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: .85rem;
+  background: #fff;
+  box-shadow: 0 20px 44px rgba(15, 23, 42, .16);
+  animation: sa-bell-in .16s ease both;
+}
+
+.sa-bell-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .8rem .95rem;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.sa-bell-panel > header strong { display: block; font-size: .84rem; }
+.sa-bell-panel > header small { color: #64748b; font-size: .71rem; }
+
+.sa-bell-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  padding: .3rem .5rem;
+  border-radius: .5rem;
+  color: #4338ca;
+  font-size: .7rem;
+  font-weight: 600;
+}
+
+.sa-bell-mark:hover { background: #eef2ff; }
+.sa-bell-panel ul { max-height: 21rem; overflow-y: auto; }
+
+.sa-bell-row {
+  display: flex;
+  width: 100%;
+  gap: .6rem;
+  padding: .72rem .95rem;
+  border-bottom: 1px solid #f1f5f9;
+  text-align: left;
+  transition: background-color .15s ease;
+}
+
+.sa-bell-row:hover { background: #f8fafc; }
+.sa-bell-row.unread { background: #f5f7ff; }
+.sa-bell-row.unread:hover { background: #eef2ff; }
+
+.sa-bell-dot {
+  width: .45rem;
+  height: .45rem;
+  flex: 0 0 auto;
+  margin-top: .35rem;
+  border-radius: 50%;
+  background: #cbd5e1;
+}
+
+.sa-bell-dot.critical { background: #dc2626; }
+.sa-bell-dot.warning { background: #d97706; }
+.sa-bell-dot.success { background: #059669; }
+.sa-bell-dot.info { background: #4f46e5; }
+
+.sa-bell-body { display: grid; gap: .16rem; min-width: 0; }
+.sa-bell-body b { font-size: .79rem; }
+.sa-bell-body > span { color: #64748b; font-size: .73rem; line-height: 1.45; }
+.sa-bell-body small { color: #94a3b8; font-size: .68rem; }
+.sa-bell-empty { padding: .95rem; color: #64748b; font-size: .74rem; line-height: 1.5; }
+
+.sa-bell-panel > footer { padding: .55rem .95rem .7rem; border-top: 1px solid #eef2f7; }
+.sa-bell-panel > footer button { color: #4338ca; font-size: .74rem; font-weight: 600; }
+.sa-bell-panel > footer button:hover { text-decoration: underline; }
+
+@keyframes sa-bell-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @media (min-width: 768px) {
   .sa-tip { display: block; }
 }
@@ -163,5 +319,38 @@
   .sa-shell.is-collapsed .sa-status-row { justify-content: center; }
 }
 
+/* Currency picker in the header. The panel is paid in several currencies, so the
+   operator has to say which one they are reading before any total means
+   anything. */
+
 /* Scoped to .sa-scope: this stylesheet now shares a bundle with the customer menu and the restaurant admin, so a bare * selector would disable their animations too. */
 @media (prefers-reduced-motion: reduce) { .sa-scope *, .sa-scope *::before, .sa-scope *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* Chime control, and the read failure that used to be invisible. */
+.sa-bell-controls { display: flex; align-items: center; gap: .2rem; }
+
+.sa-bell-sound {
+  padding: .3rem .5rem;
+  border-radius: .5rem;
+  color: #4338ca;
+  font-size: .7rem;
+  font-weight: 600;
+}
+
+.sa-bell-sound:hover { background: #eef2ff; }
+.sa-bell-sound.is-muted { color: #94a3b8; }
+.sa-bell-retry { color: #4338ca; font-weight: 700; text-decoration: underline; }
+
+/* The panel is anchored to the bell, which sits beside the account menu rather
+   than at the window edge. On a narrow window that put most of the panel past the
+   left edge of the screen, so below the header's first breakpoint it is pinned to
+   the viewport instead of to the button. */
+@media (max-width: 640px) {
+  .sa-bell-panel {
+    position: fixed;
+    top: 4.4rem;
+    right: .75rem;
+    left: .75rem;
+    width: auto;
+  }
+}

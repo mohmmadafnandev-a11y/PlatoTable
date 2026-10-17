@@ -10,13 +10,22 @@
 // courtesy, and it must never be the reason a payment path returns an error
 // after the money has already moved.
 
-const punctuation = (currency) => String(currency || '').toUpperCase()
+import { CURRENCY } from '../../shared/plans.js'
 
-/** `PKR 2,000.00` — the same shape the SQL formatter uses. */
+/**
+ * `Rs 2,000.00` — the amount as a person reads it.
+ *
+ * The platform bills in rupees, so that is the usual case. A payment recorded in
+ * another currency keeps a code rather than being relabelled, because the ledger
+ * stores what was actually charged and a notification must not contradict it.
+ */
+const SYMBOLS = { USD: '$', PKR: 'Rs ', AED: 'AED ', GBP: '£', SAR: 'SAR ' }
+
 export function formatAmount(amount, currency) {
   const value = Number(amount || 0)
+  const code = String(currency || CURRENCY).toUpperCase()
   const fixed = value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-  return `${punctuation(currency)} ${fixed}`
+  return `${SYMBOLS[code] ?? `${code} `}${fixed}`
 }
 
 /**
@@ -45,6 +54,16 @@ export async function recordPaymentNotifications(admin, {
   const plan = planName ? ` (${planName})` : ''
   const stamp = new Date().toISOString()
 
+  // Address the restaurant's own workspace. The platform's routes share the
+  // /admin prefix, so a stored '/admin/billing' resolved to the Super Admin app
+  // and took the owner out of their own panel when they followed it; the tenant's
+  // slug is what makes the link theirs. Read once per event from the restaurant
+  // itself rather than threaded through every caller, and both panels repair the
+  // old shape on the way out too (src/lib/notification-links.js).
+  const { data: tenant } = await admin.from('restaurants').select('subdomain').eq('id', restaurantId).maybeSingle()
+  const subdomain = tenant?.subdomain || ''
+  const tenantPage = (name) => subdomain ? `/admin/${subdomain}/${name}` : `/admin/${name}`
+
   const rows = succeeded
     ? [
         {
@@ -55,10 +74,10 @@ export async function recordPaymentNotifications(admin, {
           message: `We received ${money}${plan}. Your subscription is active — thank you.`,
           background_color: 'green',
           dedupe_key: `${dedupeKey}:restaurant`,
-          // Prefer the document Stripe hosts for this payment; the billing page is
-          // the fallback for a payment that has no invoice behind it (a manual
-          // record, or an invoice Stripe has not generated yet).
-          action_url: invoiceUrl || '/admin/billing',
+          // Safepay emails the customer their own receipt; when an event carries
+          // a URL for one it is used here, and the billing page is the fallback
+          // for a payment with no document behind it.
+          action_url: invoiceUrl || tenantPage('billing'),
           action_label: 'View receipt',
         },
         {
@@ -66,7 +85,7 @@ export async function recordPaymentNotifications(admin, {
           audience: 'platform',
           type: 'success',
           title: `${name} completed a payment`,
-          message: `${name} paid ${money}${plan} through Stripe ${source === 'sync' ? '(recovered by a manual sync)' : 'checkout'}.`,
+          message: `${name} paid ${money}${plan} through Safepay ${source === 'sync' ? '(recovered by a manual sync)' : 'checkout'}.`,
           background_color: 'green',
           dedupe_key: `${dedupeKey}:platform`,
           action_url: '/admin/subscriptions',
@@ -82,7 +101,7 @@ export async function recordPaymentNotifications(admin, {
           message: `We could not charge ${money}${plan}. Update your payment method to avoid losing access to your menu.`,
           background_color: 'red',
           dedupe_key: `${dedupeKey}:restaurant`,
-          action_url: '/admin/payment',
+          action_url: tenantPage('payment'),
           action_label: 'Update payment method',
         },
         {

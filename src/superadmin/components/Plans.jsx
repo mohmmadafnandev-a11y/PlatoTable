@@ -1,26 +1,27 @@
 import { useState } from 'react'
 import { AlertTriangle, CheckCircle2, CloudOff, CreditCard, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
-import { CURRENCIES, INTERVALS, PRICE_COLUMNS, featureList, intervalLabel, intervalUnit, planDurationDays, planError } from '../../../shared/plans.js'
+import { CURRENCY, INTERVALS, featureList, intervalLabel, intervalUnit, planDurationDays, planError } from '../../../shared/plans.js'
 import { usePlans } from '../lib/data'
-import { deletePlan, savePlan, syncFromStripe } from '../lib/stripe-api'
+import { deletePlan, savePlan } from '../lib/billing-api'
 import { money, relativeTime, shortDate } from '../lib/format'
 import { Card, EmptyState, Field, Notice, SectionHead, Spinner, StatusBadge, inputClass } from './ui'
 
 // Plans are the catalog the whole billing side of the platform depends on, so
 // this screen is where money is defined. Three rules shape it:
 //
-//  1. A plan is a Stripe Product with one Price per currency. Nothing here
-//     invents a second representation of price — the row and Stripe are kept in
-//     step, and the row records whether that actually happened.
+//  1. A plan is mirrored into Safepay as a reusable plan, and the row records
+//     the tokens that were minted. Prices are in rupees, which is the only
+//     currency the platform sells in. Safepay cannot change the amount on an
+//     existing plan, so a changed price mints a new
+//     token — and the token whose price no longer matches is never used for a
+//     checkout, so nobody is charged last month's figure.
 //
-//  2. Saving is never rolled back because Stripe was unavailable. Stripe's
-//     refusal is reported per currency, next to the plan it applies to.
+//  2. A plan with a trial gets TWO Safepay plans: the trial itself lives on the
+//     Safepay plan, and a restaurant that has already used its trial must not be
+//     sent to it again. The second plan is the renewal one, with no trial.
 //
-//  3. Validation comes from shared/plans.js, the same module the endpoint uses,
-//     so a plan the form accepts cannot be rejected by the server for a
-//     different reason.
-
-const blankPrice = { USD: '', AED: '', PKR: '', GBP: '', SAR: '' }
+//  3. Saving is never rolled back because Safepay was unavailable. Safepay's
+//     refusal is reported next to the plan it applies to, and Re-sync retries it.
 
 const emptyPlan = () => ({
   id: null,
@@ -30,15 +31,11 @@ const emptyPlan = () => ({
   trial_days: 7,
   is_active: true,
   features: '',
-  ...blankPrice,
+  price_pkr: '',
 })
 
-/** A row becomes a form. Prices are strings so a half-typed number stays valid. */
+/** A row becomes a form. The price is a string so a half-typed number stays valid. */
 function toForm(plan) {
-  const prices = Object.fromEntries(CURRENCIES.map((currency) => [
-    currency,
-    plan[PRICE_COLUMNS[currency]] === null || plan[PRICE_COLUMNS[currency]] === undefined ? '' : String(plan[PRICE_COLUMNS[currency]]),
-  ]))
   return {
     id: plan.id,
     name: plan.name || '',
@@ -47,13 +44,14 @@ function toForm(plan) {
     trial_days: plan.trial_days ?? 0,
     is_active: plan.is_active !== false,
     features: featureList(plan.features).join('\n'),
-    ...prices,
+    price_pkr: plan.price_pkr === null || plan.price_pkr === undefined ? '' : String(plan.price_pkr),
   }
 }
 
 /** The form becomes the payload the endpoint expects. */
 function toPayload(form) {
-  const payload = {
+  const raw = String(form.price_pkr ?? '').trim()
+  return {
     id: form.id,
     name: form.name,
     interval: form.interval,
@@ -61,13 +59,12 @@ function toPayload(form) {
     trial_days: Number(form.trial_days),
     is_active: form.is_active,
     features: featureList(form.features),
+    price_pkr: raw === '' ? null : Number(raw),
   }
-  for (const currency of CURRENCIES) {
-    const raw = String(form[currency] ?? '').trim()
-    payload[PRICE_COLUMNS[currency]] = raw === '' ? null : Number(raw)
-  }
-  return payload
 }
+
+/** A plan is linked when Safepay holds the token(s) this plan's shape needs. */
+const planLinked = (plan) => Boolean(plan.safepay_plan_id) && !plan.safepay_sync_error
 
 export default function Plans() {
   const { plans, loading, error, reload } = usePlans()
@@ -76,34 +73,45 @@ export default function Plans() {
   const [syncing, setSyncing] = useState(false)
   const [busy, setBusy] = useState('')
 
-  const stripeLinked = plans.filter((plan) => plan.stripe_product_id && !plan.stripe_sync_error).length
-  const unsynced = plans.filter((plan) => !plan.stripe_product_id || plan.stripe_sync_error).length
+  const linked = plans.filter(planLinked).length
+  const unsynced = plans.filter((plan) => !planLinked(plan)).length
 
-  const sync = async () => {
+  // Re-sync is a push, not a pull: Safepay has no endpoint that lists a
+  // merchant's plans, so the catalogue cannot be read back. Saving a plan is
+  // what creates or refreshes its tokens, so this saves the ones that are not
+  // linked yet and re-saves any that Safepay refused last time.
+  const resync = async () => {
     setSyncing(true); setFeedback(null)
-    try {
-      const result = await syncFromStripe('plans')
-      const report = result.plans || {}
-      const parts = [`Read ${report.checked ?? 0} plan${report.checked === 1 ? '' : 's'} back from Stripe`]
-      if (report.linked) parts.push(`${report.linked} linked`)
-      if (report.missing?.length) parts.push(`not found in Stripe: ${report.missing.join(', ')}`)
-      if (report.repriced?.length) {
-        parts.push(report.repriced.map((item) => `${item.plan} ${item.currency} changed ${item.from} → ${item.to} to match Stripe`).join('; '))
-      }
-      setFeedback({ tone: report.missing?.length || report.repriced?.length ? 'warning' : 'success', text: `${parts.join(' · ')}.` })
-      await reload()
-    } catch (requestError) {
-      setFeedback({ tone: 'danger', text: requestError.message })
+    const pending = plans.filter((plan) => !planLinked(plan))
+    if (!pending.length) {
+      setFeedback({ tone: 'success', text: 'Every plan is already linked in Safepay.' })
+      setSyncing(false)
+      return
     }
+    const failures = []
+    let done = 0
+    for (const plan of pending) {
+      try {
+        const result = await savePlan(toPayload(toForm(plan)))
+        if (result.safepay?.errors?.length) failures.push(`${plan.name}: ${result.safepay.errors.join(' ')}`)
+        else done += 1
+      } catch (requestError) {
+        failures.push(`${plan.name}: ${requestError.message}`)
+      }
+    }
+    setFeedback(failures.length
+      ? { tone: 'warning', text: `Linked ${done} of ${pending.length}. ${failures.join(' · ')}` }
+      : { tone: 'success', text: `Linked ${done} plan${done === 1 ? '' : 's'} in Safepay.` })
+    await reload()
     setSyncing(false)
   }
 
   const remove = async (plan) => {
-    if (!window.confirm(`Delete “${plan.name}”? Its Stripe product is closed to new checkouts, but past payments are kept.`)) return
+    if (!window.confirm(`Delete “${plan.name}”? Its Safepay plan is closed to new checkouts, but past payments are kept.`)) return
     setBusy(plan.id); setFeedback(null)
     try {
       await deletePlan(plan.id)
-      setFeedback({ tone: 'success', text: `${plan.name} deleted. Its Stripe product was deactivated.` })
+      setFeedback({ tone: 'success', text: `${plan.name} deleted. Its Safepay plan was closed.` })
       if (editing?.id === plan.id) setEditing(null)
       await reload()
     } catch (requestError) {
@@ -119,8 +127,8 @@ export default function Plans() {
       setFeedback(plan.is_active
         ? { tone: 'success', text: `${plan.name} deactivated. Existing subscriptions keep running; it can no longer be chosen for new restaurants.` }
         : { tone: 'success', text: `${plan.name} is available again.` })
-      if (result.stripe?.errors?.length) {
-        setFeedback({ tone: 'warning', text: `Saved, but Stripe reported: ${result.stripe.errors.map((item) => `${item.currency} ${item.message}`).join(' · ')}` })
+      if (result.safepay?.errors?.length) {
+        setFeedback({ tone: 'warning', text: `Saved, but Safepay reported: ${result.safepay.errors.join(' · ')}` })
       }
       await reload()
     } catch (requestError) {
@@ -133,10 +141,10 @@ export default function Plans() {
     <SectionHead
       eyebrow="PRODUCT CATALOG"
       title="Plans & pricing"
-      description="Each plan is a Stripe product with one price per currency. A restaurant is billed in its own currency."
+      description={`Each plan is a reusable Safepay plan, charged in ${CURRENCY}.`}
       action={<div className="flex flex-wrap gap-2">
-        <button onClick={sync} disabled={syncing} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
-          <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} />{syncing ? 'Syncing…' : 'Sync from Stripe'}
+        <button onClick={resync} disabled={syncing} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+          <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} />{syncing ? 'Linking…' : 'Re-sync with Safepay'}
         </button>
         <button onClick={() => { setEditing(emptyPlan()); setFeedback(null) }} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-500">
           <Plus size={16} />New plan
@@ -149,9 +157,8 @@ export default function Plans() {
       {error && <Notice tone="danger">{error}</Notice>}
       {!loading && Boolean(plans.length) && (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
-          <span className="inline-flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-600" />{stripeLinked} of {plans.length} in Stripe</span>
-          {unsynced > 0 && <span className="inline-flex items-center gap-2 text-amber-700"><AlertTriangle size={14} />{unsynced} not fully synced</span>}
-          <span className="inline-flex items-center gap-2"><CreditCard size={14} />Test mode</span>
+          <span className="inline-flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-600" />{linked} of {plans.length} linked in Safepay</span>
+          {unsynced > 0 && <span className="inline-flex items-center gap-2 text-amber-700"><AlertTriangle size={14} />{unsynced} not linked yet</span>}
         </div>
       )}
     </div>
@@ -161,12 +168,12 @@ export default function Plans() {
       initial={editing}
       onCancel={() => setEditing(null)}
       onSaved={async (result, wasNew) => {
-        const failures = result.stripe?.errors || []
+        const failures = result.safepay?.errors || []
         setFeedback(failures.length
-          ? { tone: 'warning', text: `${result.plan.name} saved. Stripe could not create every price — ${failures.map((item) => `${item.currency}: ${item.message}`).join(' · ')}` }
+          ? { tone: 'warning', text: `${result.plan.name} saved. Safepay could not create it — ${failures.join(' ')}` }
           : wasNew
-            ? { tone: 'success', text: `${result.plan.name} created in this database and in Stripe test mode.` }
-            : { tone: 'success', text: `${result.plan.name} updated. Stripe prices were reconciled.` })
+            ? { tone: 'success', text: `${result.plan.name} created in this database and linked in Safepay.` }
+            : { tone: 'success', text: `${result.plan.name} updated and re-linked in Safepay.` })
         setEditing(null)
         await reload()
       }}
@@ -177,7 +184,7 @@ export default function Plans() {
         <EmptyState
           icon={CreditCard}
           title="No plans yet"
-          description="Create your first plan — it is written to this database and mirrored into Stripe test mode as a product with one price per currency."
+          description="Create your first plan — it is written to this database and mirrored into Safepay as a reusable plan."
           action={<button onClick={() => setEditing(emptyPlan())} className="rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white">Create a plan</button>}
         />
       </Card>
@@ -199,11 +206,12 @@ export default function Plans() {
 }
 
 function PlanCard({ plan, busy, onEdit, onToggle, onDelete }) {
-  const prices = CURRENCIES.map((currency) => ({
-    currency,
-    amount: plan[PRICE_COLUMNS[currency]] === null || plan[PRICE_COLUMNS[currency]] === undefined ? null : Number(plan[PRICE_COLUMNS[currency]]),
-    priceId: plan[`stripe_price_${currency.toLowerCase()}`] || null,
-  })).filter((entry) => entry.amount !== null)
+  const amount = plan.price_pkr === null || plan.price_pkr === undefined || plan.price_pkr === '' ? null : Number(plan.price_pkr)
+  const inSafepay = Boolean(plan.safepay_plan_id)
+  // A plan with a trial is mirrored twice, and both tokens are what a checkout
+  // needs: the trial one for a first subscription, the other for every one after.
+  const wantsTrialPlan = Number(plan.trial_days) > 0
+  const fullyLinked = inSafepay && (!wantsTrialPlan || Boolean(plan.safepay_plan_id_trial))
 
   return (
     <Card className={`flex flex-col ${plan.is_active ? '' : 'opacity-80'}`}>
@@ -216,18 +224,16 @@ function PlanCard({ plan, busy, onEdit, onToggle, onDelete }) {
       </div>
 
       <div className="mt-5 grid gap-1.5">
-        {prices.map((entry) => (
-          <p key={entry.currency} className="flex items-baseline justify-between gap-3 text-sm">
-            <span className="font-semibold text-slate-900">
-              {money(entry.amount, entry.currency)}<span className="ml-1 text-xs font-normal text-slate-400">/{intervalUnit(plan)}</span>
-            </span>
-            <span className="inline-flex items-center gap-1.5 text-xs">
-              {entry.priceId
-                ? <><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /><span className="text-slate-400">{entry.currency} in Stripe</span></>
-                : <><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /><span className="text-amber-700">No {entry.currency} Stripe price</span></>}
-            </span>
-          </p>
-        ))}
+        <p className="flex items-baseline justify-between gap-3 text-sm">
+          <span className="font-semibold text-slate-900">
+            {amount === null ? <span className="font-medium text-amber-700">No price set</span> : <>{money(amount, CURRENCY)}<span className="ml-1 text-xs font-normal text-slate-400">/{intervalUnit(plan)}</span></>}
+          </span>
+          <span className="inline-flex items-center gap-1.5 text-xs">
+            {fullyLinked
+              ? <><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /><span className="text-slate-400">Linked in Safepay</span></>
+              : <><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /><span className="text-amber-700">{inSafepay ? 'Trial plan missing' : 'Not linked'}</span></>}
+          </span>
+        </p>
       </div>
 
       {featureList(plan.features).length > 0 && (
@@ -237,12 +243,19 @@ function PlanCard({ plan, busy, onEdit, onToggle, onDelete }) {
       )}
 
       <div className="mt-5 border-t border-slate-100 pt-4 text-xs text-slate-500">
-        {plan.stripe_sync_error ? (
-          <p className="flex gap-2 text-amber-700"><CloudOff size={14} className="mt-0.5 flex-none" /><span>Not fully in Stripe — {plan.stripe_sync_error}</span></p>
-        ) : plan.stripe_product_id ? (
-          <p className="flex gap-2 text-emerald-700"><CheckCircle2 size={14} className="mt-0.5 flex-none" /><span>In Stripe as <code className="text-[11px]">{plan.stripe_product_id}</code>{plan.stripe_synced_at ? ` · ${relativeTime(plan.stripe_synced_at)}` : ''}</span></p>
+        {plan.safepay_sync_error ? (
+          <p className="flex gap-2 text-amber-700"><CloudOff size={14} className="mt-0.5 flex-none" /><span>Not linked — {plan.safepay_sync_error}</span></p>
+        ) : fullyLinked ? (
+          <p className="flex gap-2 text-emerald-700">
+            <CheckCircle2 size={14} className="mt-0.5 flex-none" />
+            <span>
+              Linked as <code className="text-[11px]">{plan.safepay_plan_id}</code>
+              {wantsTrialPlan ? <> and <code className="text-[11px]">{plan.safepay_plan_id_trial}</code> (trial)</> : null}
+              {plan.safepay_synced_at ? ` · ${relativeTime(plan.safepay_synced_at)}` : ''}
+            </span>
+          </p>
         ) : (
-          <p className="flex gap-2"><CloudOff size={14} className="mt-0.5 flex-none" /><span>Not in Stripe yet — edit and save to create it.</span></p>
+          <p className="flex gap-2"><CloudOff size={14} className="mt-0.5 flex-none" /><span>Not in Safepay yet — edit and save, or use Re-sync.</span></p>
         )}
         <p className="mt-2">{plan.duration_days} day billing cycle · updated {shortDate(plan.updated_at)}</p>
       </div>
@@ -281,7 +294,9 @@ function PlanEditor({ initial, onCancel, onSaved }) {
     setSaving(false)
   }
 
-  const examplePrice = CURRENCIES.find((currency) => String(form[currency] ?? '').trim() !== '')
+  const priceTyped = String(form.price_pkr ?? '').trim()
+  const amountHint = priceTyped === '' ? 'Required — a plan with no price cannot be sold.' : `${money(Number(priceTyped), CURRENCY)} per ${intervalUnit(form)}`
+  const yearly = form.interval === 'year' || planDurationDays(form.interval, form.interval_count) === 365 * Number(form.interval_count || 1)
 
   return (
     <Card as="form" onSubmit={submit} className="mb-6 grid gap-6">
@@ -290,7 +305,8 @@ function PlanEditor({ initial, onCancel, onSaved }) {
           <p className="text-xs font-semibold tracking-[.16em] text-indigo-600">{isNew ? 'NEW PLAN' : 'EDIT PLAN'}</p>
           <h2 className="mt-2 text-xl font-semibold tracking-tight text-slate-900">{form.name || 'Untitled plan'}</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Saving writes this record and creates or updates its Stripe product and prices in test mode.
+            Saving writes this record and creates or refreshes its Safepay plan
+            {Number(form.trial_days) > 0 ? 's (one with the trial, one without)' : ''}.
           </p>
         </div>
         <button type="button" onClick={onCancel} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label="Close editor"><X size={18} /></button>
@@ -303,7 +319,7 @@ function PlanEditor({ initial, onCancel, onSaved }) {
           <input required value={form.name} onChange={set('name')} placeholder="Basic" className={inputClass} />
         </Field>
 
-        <Field label="Trial days" hint="Offered once per restaurant. Saved on the Stripe subscription when checkout opens.">
+        <Field label="Trial days" hint="Offered once per restaurant. Safepay keeps the trial on the plan, so a second, trial-free plan is created for renewals.">
           <input type="number" min="0" max="365" value={form.trial_days} onChange={set('trial_days')} className={inputClass} />
         </Field>
 
@@ -313,54 +329,48 @@ function PlanEditor({ initial, onCancel, onSaved }) {
           </select>
         </Field>
 
-        <Field label="Charge every" hint={`${intervalLabel(form.interval, Number(form.interval_count))}. Stripe collects once per period.`}>
+        <Field label="Charge every" hint={`${intervalLabel(form.interval, Number(form.interval_count))}. Safepay collects once per period.`}>
           <input type="number" min="1" max="36" value={form.interval_count} onChange={set('interval_count')} className={inputClass} />
         </Field>
       </fieldset>
 
       <fieldset className="grid gap-4">
-        <legend className="mb-3 text-sm font-semibold text-slate-800">Price per currency</legend>
+        <legend className="mb-3 text-sm font-semibold text-slate-800">Price</legend>
         <p className="-mt-1 text-sm text-slate-500">
-          A restaurant is billed in its own currency, so the price that applies is the one matching its account.
-          USD, AED and PKR are required; GBP and SAR may be left blank.
+          What a restaurant pays each billing period, in {CURRENCY}. Every plan is sold in rupees —
+          there is no second price to keep in step.
         </p>
-        <div className="grid gap-4 sm:grid-cols-3">
-          {CURRENCIES.map((currency) => {
-            const amount = String(form[currency] ?? '').trim()
-            return (
-              <Field key={currency} label={currency} hint={amount === '' ? 'Not sold in this currency' : `${money(Number(amount), currency)} per ${intervalUnit(form)}`}>
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  inputMode="decimal"
-                  value={form[currency]}
-                  onChange={set(currency)}
-                  placeholder={['USD', 'AED', 'PKR'].includes(currency) ? 'Required' : 'Optional'}
-                  className={inputClass}
-                />
-              </Field>
-            )
-          })}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label={`Price per period (${CURRENCY})`} hint={amountHint}>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              inputMode="decimal"
+              value={form.price_pkr}
+              onChange={set('price_pkr')}
+              placeholder="Required"
+              className={inputClass}
+            />
+          </Field>
         </div>
-        {examplePrice && (
-          <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-            Stripe will be told: <strong className="font-semibold">{planDurationDays(form.interval, form.interval_count) === 365 * Number(form.interval_count || 1) ? 'yearly' : 'monthly'}</strong> recurring
-            {planDurationDays(form.interval, form.interval_count) === 365 * Number(form.interval_count || 1) ? ` (every ${form.interval_count} year${Number(form.interval_count) === 1 ? '' : 's'})` : ` (every ${form.interval_count} month${Number(form.interval_count) === 1 ? '' : 's'})`}
-            {' '}prices, one per filled currency. Changing an amount creates a new Stripe price and retires the old one — existing subscribers keep their current price until it renews.
-          </p>
-        )}
+        <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+          Safepay will be told: <strong className="font-semibold">{yearly ? 'yearly' : 'monthly'}</strong> recurring
+          {yearly ? ` (every ${form.interval_count} year${Number(form.interval_count) === 1 ? '' : 's'})` : ` (every ${form.interval_count} month${Number(form.interval_count) === 1 ? '' : 's'})`}
+          {' '}charge, in {CURRENCY}. Changing the amount creates a new Safepay plan and retires the old one — existing subscribers
+          keep their current price until it renews.
+        </p>
       </fieldset>
 
       <fieldset className="grid gap-4">
         <legend className="mb-3 text-sm font-semibold text-slate-800">Detail</legend>
-        <Field label="Features" hint="One per line. Also written to the Stripe product description.">
+        <Field label="Features" hint="One per line. Also written to the Safepay plan description.">
           <textarea value={form.features} onChange={set('features')} rows={4} placeholder={'Unlimited menu items\nQR codes for every table\nDaily sales summary'} className="rounded-lg border border-slate-300 p-3 text-sm text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" />
         </Field>
         <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
           <input type="checkbox" checked={form.is_active} onChange={(event) => setForm((current) => ({ ...current, is_active: event.target.checked }))} className="h-4 w-4 accent-indigo-600" />
           Available for new restaurants
-          <span className="text-xs font-normal text-slate-500">Deactivating also closes the Stripe product to new checkouts.</span>
+          <span className="text-xs font-normal text-slate-500">Deactivating takes it off the list new restaurants can choose from.</span>
         </label>
       </fieldset>
 
@@ -370,7 +380,7 @@ function PlanEditor({ initial, onCancel, onSaved }) {
 
       <div className="flex flex-wrap gap-3">
         <button disabled={saving || Boolean(invalid)} className="rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-60">
-          {saving ? 'Saving to Stripe…' : isNew ? 'Create plan' : 'Save changes'}
+          {saving ? 'Saving to Safepay…' : isNew ? 'Create plan' : 'Save changes'}
         </button>
         <button type="button" onClick={onCancel} className="rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Cancel</button>
       </div>

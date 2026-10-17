@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Bell, ExternalLink } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { dateTime, plainNumber, shortDate } from '../lib/format'
+import { notificationTarget } from '../../lib/notification-links'
 import { Card, EmptyState, Notice, SectionHead, Spinner, StatusBadge, inputClass } from './ui'
 
 // Delivery history for everything the platform has told restaurants, plus the
@@ -164,7 +165,7 @@ export default function Notifications({ navigate }) {
                           </td>
                           <td className="p-4 text-slate-600">
                             {row.action_url
-                              ? <a href={row.action_url} className="inline-flex items-center gap-1 font-semibold text-indigo-600">{row.action_label || 'Open'}<ExternalLink size={13} /></a>
+                              ? <a href={notificationTarget(row.action_url, row.restaurants?.subdomain)} className="inline-flex items-center gap-1 font-semibold text-indigo-600">{row.action_label || 'Open'}<ExternalLink size={13} /></a>
                               : <span className="text-slate-400">—</span>}
                           </td>
                         </tr>

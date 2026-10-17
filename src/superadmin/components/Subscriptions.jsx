@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CalendarClock, CreditCard, ExternalLink, Play, Pause, Receipt, RefreshCw, XCircle } from 'lucide-react'
-import { intervalLabel, planDurationDays, resolvePlanPrice } from '../../../shared/plans.js'
+import { CURRENCY, intervalLabel, planDurationDays, resolvePlanPrice } from '../../../shared/plans.js'
 import { supabase } from '../lib/supabase'
 import { logActivity } from '../lib/data'
-import { openBillingPortal, runBillingSweep, startSubscription, syncFromStripe } from '../lib/stripe-api'
+import { cancelSubscription, removePaymentMethod, runBillingSweep, savePaymentMethod, setAutoRenew, startSubscription, syncSubscription } from '../lib/billing-api'
 import { STATUSES, dateTime, daysBetween, money, plainNumber, shortDate } from '../lib/format'
-import { Card, EmptyState, Notice, SectionHead, Spinner, StatCard, StatusBadge, inputClass } from './ui'
+import SubscriptionProgress from './SubscriptionProgress'
+import { Card, EmptyState, Notice, SectionHead, Spinner, StatusBadge, inputClass } from './ui'
 
 function useSubscriptionData() {
   const [subscriptions, setSubscriptions] = useState([])
@@ -18,10 +19,10 @@ function useSubscriptionData() {
     return Promise.all([
       supabase
         .from('subscriptions')
-        .select('*, restaurants(id, name, subdomain, is_active, currency), subscription_plans(id, name, interval, interval_count)')
+        .select('*, restaurants(id, name, subdomain, is_active), subscription_plans(id, name, interval, interval_count)')
         .order('created_at', { ascending: false }),
       supabase.from('subscription_plans')
-        .select('id, name, interval, interval_count, price_usd, price_aed, price_pkr, price_gbp, price_sar, stripe_price_usd, stripe_price_aed, stripe_price_pkr, stripe_price_gbp, stripe_price_sar')
+        .select('id, name, interval, interval_count, price_pkr, trial_days, safepay_plan_id, safepay_plan_id_trial')
         .order('interval').order('name'),
     ]).then(([subscriptionResult, planResult]) => {
       const failure = subscriptionResult.error || planResult.error
@@ -42,8 +43,8 @@ function useSubscriptionData() {
 /**
  * Every charge due inside the window, soonest first.
  *
- * Read from the database rather than from Stripe so the screen still answers
- * when Stripe is unreachable, and so a trial that has never touched Stripe —
+ * Read from the database rather than from Safepay so the screen still answers
+ * when Safepay is unreachable, and so a trial that has never touched Safepay —
  * every restaurant before it adds a card — appears like any other.
  */
 function useUpcomingPayments(days = 30) {
@@ -133,7 +134,7 @@ export function UpcomingPayments() {
         <div className="flex flex-wrap gap-3 border-b border-slate-100 px-5 py-4">
           {totals.map((total) => (
             <span key={total.currency} className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700">
-              {total.count} due · {money(total.amount, total.currency)}
+              {total.count} due · {money(total.amount, CURRENCY)}
             </span>
           ))}
         </div>
@@ -175,8 +176,12 @@ export function UpcomingPayments() {
                           {row.days_until === 0 ? 'today' : `${row.days_until}d`}
                         </span>
                       </td>
-                      <td className="p-4 text-slate-600">{money(row.amount, row.currency)}</td>
-                      <td className="p-4 text-slate-600">{row.has_stripe ? 'Yes' : <span className="text-amber-700">Not yet</span>}</td>
+                      <td className="p-4 text-slate-600">{money(row.amount, CURRENCY)}</td>
+                      <td className="p-4 text-slate-600">
+                        {row.card_last4
+                          ? `${row.card_brand || 'Card'} ···${row.card_last4}`
+                          : row.has_safepay ? 'Yes' : <span className="text-amber-700">Not yet</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -260,7 +265,7 @@ export function Subscriptions({ navigate }) {
                           </td>
                           <td className="p-4"><StatusBadge status={subscription.status} /></td>
                           <td className="p-4 text-slate-600">{subscription.subscription_plans?.name || 'Custom'}</td>
-                          <td className="p-4 text-slate-600">{money(subscription.amount, subscription.currency)}</td>
+                          <td className="p-4 text-slate-600">{money(subscription.amount, CURRENCY)}</td>
                           <td className="p-4 text-slate-600">{end ? shortDate(end) : '—'}</td>
                           <td className="p-4">
                             {remaining === null
@@ -342,30 +347,30 @@ export function SubscriptionDetail({ navigate, id, profile }) {
   const changePlan = async (planId) => {
     const plan = plans.find((item) => item.id === planId)
     if (!plan) return write({ plan_id: null }, 'subscription_plan_cleared')
-    const currency = (subscription.currency || 'USD').toUpperCase()
-    // This used to fall back to the USD price when the plan had no price in the
-    // subscription's currency, which silently recorded the wrong amount. Refuse
-    // instead: a wrong figure here ends up on an invoice.
-    const priced = resolvePlanPrice(plan, currency)
+    // The price comes from the plan, never from the subscription's stored
+    // columns, so a wrong figure cannot be written onto an invoice.
+    const priced = resolvePlanPrice(plan, CURRENCY)
     if (!priced) {
-      return setFeedback({ tone: 'warning', text: `${plan.name} has no ${currency} price, so it cannot bill this restaurant. Add that price in Plans & pricing first.` })
+      return setFeedback({ tone: 'warning', text: `${plan.name} has no ${CURRENCY} price, so it cannot bill this restaurant. Add that price in Plans & pricing first.` })
     }
     return write(
-      { plan_id: plan.id, amount: priced.amount, currency: priced.currency },
+      { plan_id: plan.id, amount: priced.amount, currency: CURRENCY },
       'subscription_plan_changed',
-      { plan: plan.name, interval: `${plan.interval_count || 1} ${plan.interval || 'month'}`, amount: priced.amount, currency: priced.currency },
+      { plan: plan.name, interval: `${plan.interval_count || 1} ${plan.interval || 'month'}`, amount: priced.amount, currency: CURRENCY },
     )
   }
 
-  // Opens hosted Stripe Checkout. The price is resolved on the server from the
-  // plan and this restaurant's currency, so the amount charged never depends on
-  // anything the browser sends.
+  // Opens the hosted card page. The price is resolved on the server from the
+  // plan, so the amount charged never depends on anything the browser sends, and
+  // the first period is charged by the platform itself the moment Safepay
+  // confirms the card — see api/safepay/checkout.js for why the hosted *payment*
+  // page cannot be used for this.
   const beginCheckout = async () => {
-    if (!subscription.plan_id) return setFeedback({ tone: 'warning', text: 'Choose a catalogue plan before starting a Stripe subscription.' })
+    if (!subscription.plan_id) return setFeedback({ tone: 'warning', text: 'Choose a catalogue plan before starting a Safepay subscription.' })
     setSaving('checkout'); setFeedback(null)
     try {
       const result = await startSubscription(restaurantId, subscription.plan_id)
-      setFeedback({ tone: 'success', text: `Opening Stripe Checkout — ${money(result.amount, result.currency)}${result.trialDays ? ` after a ${result.trialDays} day trial` : ''}. Complete it in the Stripe window.` })
+      setFeedback({ tone: 'success', text: `Opening Safepay's card page. The card is saved with a Rs 0.00 verification, and ${money(result.amount, CURRENCY)} is charged automatically the moment it is confirmed.` })
       // `assign` rather than assigning `href`: the lint rule forbids mutating a
       // value owned outside the component, and this is also the honest intent —
       // we are leaving, not setting a property.
@@ -376,28 +381,95 @@ export function SubscriptionDetail({ navigate, id, profile }) {
     }
   }
 
-  const openPortal = async () => {
-    setSaving('portal'); setFeedback(null)
+  // The platform bills its own subscriptions (see api/_lib/safepay.js for why), so
+  // "cancel" is a decision recorded here rather than an object cancelled at Safepay:
+  // the paid period runs to its end, nothing more is charged, and the sweep closes
+  // the row once the days the restaurant paid for are over.
+  const stopSubscription = async () => {
+    if (!window.confirm(`Stop renewing ${subscription.restaurants?.name || 'this restaurant'}? Its menu stays online until ${currentEnd ? shortDate(currentEnd) : 'the paid period ends'}, then it stops and nothing more is charged.`)) return
+    setSaving('cancel'); setFeedback(null)
     try {
-      const { url } = await openBillingPortal(restaurantId)
-      window.location.assign(url)
+      const result = await cancelSubscription(restaurantId)
+      setFeedback(result.atPeriodEnd
+        ? { tone: 'success', text: `Renewal stopped. The restaurant keeps what it paid for until ${result.endsAt ? shortDate(result.endsAt) : 'the period ends'}.` }
+        : { tone: 'success', text: 'Subscription cancelled.' })
+      load()
+    } catch (error) {
+      setFeedback({ tone: 'danger', text: error.message })
+    }
+    setSaving('')
+  }
+
+  // Saving a card is its own session: a zero-amount verification on Safepay's
+  // page that stores the card against the restaurant's own customer without
+  // taking money. If a payment is already due — a failed renewal, an ended trial,
+  // a subscription that was started but never charged — the platform charges it
+  // instantly once the card is confirmed, so this doubles as "repair the card".
+  const addCard = async () => {
+    setSaving('card'); setFeedback(null)
+    try {
+      const result = await savePaymentMethod(restaurantId)
+      setFeedback({ tone: 'success', text: 'Opening Safepay’s page to add a card — a Rs 0.00 verification. Anything already due is charged automatically the moment the card is confirmed.' })
+      window.location.assign(result.url)
     } catch (error) {
       setFeedback({ tone: 'danger', text: error.message })
       setSaving('')
     }
   }
 
-  // Stripe cannot deliver a webhook to a laptop, so in development this is the
+  const forgetCard = async () => {
+    if (!window.confirm(`Remove the card on file for ${subscription.restaurants?.name || 'this restaurant'}? Renewals stop until a new card is added.`)) return
+    setSaving('remove_card'); setFeedback(null)
+    try {
+      await removePaymentMethod(restaurantId)
+      setFeedback({ tone: 'success', text: 'Card removed. Renewals are switched off until a card is added again.' })
+      load()
+    } catch (error) {
+      setFeedback({ tone: 'danger', text: error.message })
+    }
+    setSaving('')
+  }
+
+  const toggleRenewal = async () => {
+    const switchingOn = Boolean(subscription.cancel_at_period_end)
+    setSaving('renewal'); setFeedback(null)
+    try {
+      await setAutoRenew(restaurantId, switchingOn)
+      setFeedback({
+        tone: 'success',
+        text: switchingOn
+          ? 'Renewal switched back on — the card on file is charged at the end of the period.'
+          : `Renewal switched off. The restaurant keeps what it paid for until ${currentEnd ? shortDate(currentEnd) : 'the period ends'}, and nothing more is charged.`,
+      })
+      load()
+    } catch (error) {
+      setFeedback({ tone: 'danger', text: error.message })
+    }
+    setSaving('')
+  }
+
+  // Safepay cannot deliver a webhook to a laptop, so in development this is the
   // only way the subscription actually updates after a test payment. It is also
   // the recovery path if a live webhook delivery was ever missed.
   const syncNow = async () => {
     setSaving('sync'); setFeedback(null)
     try {
-      const result = await syncFromStripe('subscriptions')
-      const report = result.subscriptions || {}
-      const parts = [`Read ${report.checked ?? 0} subscription${report.checked === 1 ? '' : 's'} from Stripe`, `${report.updated ?? 0} updated`, `${report.transactions ?? 0} payment(s) recorded`]
-      if (report.unmatched?.length) parts.push(`${report.unmatched.length} not matched to a restaurant`)
-      setFeedback({ tone: report.unmatched?.length ? 'warning' : 'success', text: `${parts.join(' · ')}.` })
+      const result = await syncSubscription(restaurantId)
+      // The due-cancellation housekeeping is reported here because this is the one
+      // screen where an operator can watch a subscription whose renewal was switched
+      // off actually reach the end of its paid period and stop.
+      const stopped = result.housekeeping?.cancelled ?? 0
+      const outcome = {
+        paid: 'the payment settled and the period is covered',
+        'card-saved': 'the card was accepted and is now on file',
+        pending: 'the customer has not finished paying yet',
+        unsettled: 'the payment attempt ended without a settled charge',
+        'nothing-waiting': 'there was no payment waiting to be read back',
+      }[result.outcome]
+      setFeedback({
+        tone: result.outcome === 'unsettled' ? 'warning' : 'success',
+        text: `Read from Safepay — ${outcome || 'nothing changed'}${result.subscription?.card_last4 ? `, card ${result.subscription.card_brand || ''} ···${result.subscription.card_last4}`.replace('  ', ' ') : ''}${stopped ? `, and ${stopped} cancelled subscription${stopped === 1 ? '' : 's'} closed` : ''}.`,
+      })
       load()
     } catch (error) {
       setFeedback({ tone: 'danger', text: error.message })
@@ -432,7 +504,7 @@ export function SubscriptionDetail({ navigate, id, profile }) {
     // which silently gave a yearly plan a monthly period, so the next invoice
     // fell due eleven months early.
     const periodDays = planDurationDays(subscription.subscription_plans?.interval, subscription.subscription_plans?.interval_count)
-    if (!window.confirm(`Record an offline payment of ${money(subscription.amount, subscription.currency)} and extend the period by ${periodDays} days?`)) return
+    if (!window.confirm(`Record an offline payment of ${money(subscription.amount, CURRENCY)} and extend the period by ${periodDays} days?`)) return
     setSaving('mark_paid')
     const periodStart = new Date()
     const periodEnd = new Date(periodStart.getTime() + periodDays * 86400000)
@@ -442,7 +514,7 @@ export function SubscriptionDetail({ navigate, id, profile }) {
       subscription_id: subscription.id,
       provider: 'manual',
       amount: subscription.amount,
-      currency: subscription.currency,
+      currency: CURRENCY,
       status: 'succeeded',
       payment_method: 'manual',
     })
@@ -491,25 +563,11 @@ export function SubscriptionDetail({ navigate, id, profile }) {
 
       {feedback && <div className="mb-5"><Notice tone={feedback.tone}>{feedback.text}</Notice></div>}
 
-      <section className="grid gap-4 sm:grid-cols-3">
-        <StatCard
-          label="Recurring amount"
-          value={money(subscription.amount, subscription.currency)}
-          hint={subscription.subscription_plans
-            ? `${subscription.subscription_plans.name} · ${intervalLabel(subscription.subscription_plans)}`
-            : 'Custom plan'}
-          icon={CreditCard}
-          tone="text-indigo-600 bg-indigo-50"
-        />
-        <StatCard
-          label={subscription.status === 'trialing' ? 'Trial ends' : 'Period ends'}
-          value={currentEnd ? shortDate(currentEnd) : '—'}
-          hint={(() => { const remaining = daysBetween(currentEnd); return remaining === null ? 'No end date recorded' : remaining < 0 ? `Expired ${Math.abs(remaining)} days ago` : `${remaining} days remaining` })()}
-          icon={CalendarClock}
-          tone="text-amber-600 bg-amber-50"
-        />
-        <StatCard label="Payments recorded" value={plainNumber(payments.length)} hint={`Last status ${subscription.last_payment_status || 'unknown'}`} icon={Receipt} tone="text-emerald-600 bg-emerald-50" />
-      </section>
+      {/* The period question — how far through, what is charged next, when — is
+          answered by one card rather than by three that each held a fragment of
+          it. The figures that are not part of that story (how many payments are
+          on file, the plan's own interval) stay in the summary below. */}
+      <SubscriptionProgress subscription={subscription} />
 
       <section className="mt-6 grid gap-6 lg:grid-cols-3">
         <Card className="p-6 lg:col-span-2">
@@ -518,12 +576,15 @@ export function SubscriptionDetail({ navigate, id, profile }) {
             {[
               ['Status', subscription.status.replace(/_/g, ' ')],
               ['Plan', subscription.subscription_plans?.name || 'Custom plan'],
-              ['Provider', subscription.provider || 'stripe'],
-              ['Currency', subscription.currency],
-              ['Stripe customer', subscription.provider_customer_id || 'Not linked'],
-              ['Stripe subscription', subscription.provider_subscription_id || 'Not linked'],
+              ['Provider', subscription.provider || 'safepay'],
+              ['Safepay customer', subscription.provider_customer_id || 'Not linked'],
+              ['Card on file', subscription.card_last4 ? `${subscription.card_brand || 'Card'} ···${subscription.card_last4}${subscription.card_exp_month ? ` · expires ${subscription.card_exp_month}/${String(subscription.card_exp_year || '').slice(-2)}` : ''}` : 'None'],
+              ['Payment session', subscription.safepay_tracker_id || 'None waiting'],
+              ['Last charge', subscription.last_charge_at ? dateTime(subscription.last_charge_at) : 'Never'],
               ['Cancels at period end', subscription.cancel_at_period_end ? 'Yes' : 'No'],
               ['Trial already used', subscription.trial_used_at ? shortDate(subscription.trial_used_at) : 'No'],
+              ['Payments recorded', plainNumber(payments.length)],
+              ['Period', subscription.subscription_plans ? intervalLabel(subscription.subscription_plans) : 'Custom plan'],
             ].map(([label, value]) => (
               <div key={label}>
                 <dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</dt>
@@ -551,41 +612,52 @@ export function SubscriptionDetail({ navigate, id, profile }) {
         <p className="mt-1 text-sm text-slate-500">Every action here is recorded in the activity log.</p>
 
         <div className="mt-5 rounded-xl border border-indigo-200 bg-indigo-50 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-800">Stripe billing</h3>
-              <p className="mt-1 text-xs text-slate-600">
-                {subscription.provider_subscription_id
-                  ? 'This restaurant has a live Stripe subscription. Invoices and status arrive by webhook; pull them manually if a delivery was missed.'
-                  : 'No Stripe subscription is attached yet. Checkout uses the plan’s price in this restaurant’s currency, then Stripe keeps the status updated.'}
-              </p>
-            </div>
-            <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">Test mode</span>
-          </div>
+          <h3 className="text-sm font-semibold text-slate-800">Safepay billing</h3>
+          <p className="mt-1 text-xs text-slate-600">
+            {subscription.card_last4
+              ? `Renewals are charged to ${subscription.card_brand || 'the card'} ···${subscription.card_last4} on Safepay, automatically, and written down here from Safepay's own record of the payment.`
+              : `No card on file yet. The plan’s ${CURRENCY} price is charged automatically right after the card is saved on Safepay’s page (a Rs 0.00 verification) — the customer needs no Safepay account — and every later period is charged the same way.`}
+          </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <button
               disabled={!!saving || !subscription.plan_id}
               onClick={beginCheckout}
               className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
             >
-              <ExternalLink size={16} />{saving === 'checkout' ? 'Opening Stripe…' : subscription.provider_subscription_id ? 'Start another subscription' : 'Start Stripe subscription'}
+              <ExternalLink size={16} />{saving === 'checkout' ? 'Opening Safepay…' : subscription.card_last4 ? 'Charge the next period' : 'Take payment'}
             </button>
             <button
-              disabled={!!saving || !subscription.provider_customer_id}
-              onClick={openPortal}
+              disabled={!!saving}
+              onClick={addCard}
+              className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-700 disabled:opacity-50"
+            >
+              <CreditCard size={16} />{saving === 'card' ? 'Opening Safepay…' : subscription.card_last4 ? 'Replace the card' : 'Add a card'}
+            </button>
+            <button
+              disabled={!!saving || !['active', 'trialing', 'past_due'].includes(subscription.status)}
+              onClick={toggleRenewal}
               className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"
             >
-              {saving === 'portal' ? 'Opening…' : 'Update payment method'}
+              {saving === 'renewal' ? 'Saving…' : subscription.cancel_at_period_end ? 'Switch renewal back on' : 'Switch renewal off'}
             </button>
+            {subscription.safepay_payment_method_id && (
+              <button
+                disabled={!!saving}
+                onClick={forgetCard}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 disabled:opacity-50"
+              >
+                {saving === 'remove_card' ? 'Removing…' : 'Remove the card'}
+              </button>
+            )}
             <button
               disabled={!!saving}
               onClick={syncNow}
               className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"
             >
-              <RefreshCw size={16} className={saving === 'sync' ? 'animate-spin' : ''} />{saving === 'sync' ? 'Syncing…' : 'Sync from Stripe'}
+              <RefreshCw size={16} className={saving === 'sync' ? 'animate-spin' : ''} />{saving === 'sync' ? 'Reading…' : 'Read back from Safepay'}
             </button>
           </div>
-          {!subscription.plan_id && <p className="mt-3 text-xs font-medium text-amber-700">Choose a plan below first — Checkout charges whatever price that plan carries in {subscription.currency}.</p>}
+          {!subscription.plan_id && <p className="mt-3 text-xs font-medium text-amber-700">Choose a plan below first — Checkout charges that plan’s {CURRENCY} price.</p>}
         </div>
 
         <div className="mt-6 grid gap-6 lg:grid-cols-3">
@@ -609,9 +681,9 @@ export function SubscriptionDetail({ navigate, id, profile }) {
 
           <div className="rounded-xl border border-slate-200 p-4">
             <h3 className="text-sm font-semibold text-slate-800">Change plan</h3>
-            <p className="mt-1 text-xs text-slate-500">Pricing follows the plan and the subscription currency.</p>
-            {/* Only plans that can actually bill this restaurant in its own
-                currency are worth choosing, so the rest are marked. */}
+            <p className="mt-1 text-xs text-slate-500">Pricing follows the plan. Every plan is priced in {CURRENCY}.</p>
+            {/* Only plans that can actually be billed are worth choosing, so the
+                rest are marked rather than offered and then refused. */}
             <select
               disabled={!plans.length || !!saving}
               value={subscription.plan_id || ''}
@@ -620,8 +692,8 @@ export function SubscriptionDetail({ navigate, id, profile }) {
             >
               <option value="">Custom plan (no catalogue plan)</option>
               {plans.map((plan) => {
-                const billable = Boolean(resolvePlanPrice(plan, subscription.currency || 'USD'))
-                return <option key={plan.id} value={plan.id}>{plan.name} — {intervalLabel(plan)}{billable ? '' : ` (no ${(subscription.currency || 'USD').toUpperCase()} price)`}</option>
+                const billable = Boolean(resolvePlanPrice(plan, CURRENCY))
+                return <option key={plan.id} value={plan.id}>{plan.name} — {intervalLabel(plan)}{billable ? '' : ` (no ${CURRENCY} price)`}</option>
               })}
             </select>
             {!plans.length && <p className="mt-2 text-xs text-amber-700">No plans exist yet. Create one under Plans & pricing.</p>}
@@ -641,19 +713,24 @@ export function SubscriptionDetail({ navigate, id, profile }) {
         </div>
 
         <div className="mt-6 flex flex-wrap gap-3 border-t border-slate-100 pt-5">
+          {/* Stopping a renewal is a decision recorded here: the platform charges the
+              card itself, so there is no Safepay object to cancel, and stopping the
+              charge is what actually ends the billing. */}
           <button
-            disabled={!!saving}
-            onClick={() => write({ cancel_at_period_end: true, status: 'canceled', canceled_at: new Date().toISOString() }, 'subscription_canceled')}
+            disabled={!!saving || (subscription.status === 'canceled' && !subscription.cancel_at_period_end)}
+            onClick={stopSubscription}
             className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-600 disabled:opacity-60"
           >
-            <XCircle size={16} />Cancel subscription
+            <XCircle size={16} />Stop renewing
           </button>
+          {/* Resuming is the switch back on, which needs the card the renewal is
+              charged to — so it is only offered when there is one. */}
           <button
-            disabled={!!saving || subscription.status !== 'canceled'}
+            disabled={!!saving || !subscription.cancel_at_period_end || !subscription.safepay_card_pointer}
             onClick={() => write({ cancel_at_period_end: false, status: 'active', canceled_at: null }, 'subscription_resumed')}
             className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-40"
           >
-            <Play size={16} />Resume subscription
+            <Play size={16} />Resume renewal
           </button>
           <button
             disabled={!!saving || subscription.status === 'suspended'}
@@ -692,7 +769,7 @@ export function SubscriptionDetail({ navigate, id, profile }) {
                 {payments.map((payment) => (
                   <tr key={payment.id} className="border-t border-slate-100">
                     <td className="p-4 text-slate-500">{dateTime(payment.created_at)}</td>
-                    <td className="p-4 text-slate-700">{money(payment.amount, payment.currency)}</td>
+                    <td className="p-4 text-slate-700">{money(payment.amount, CURRENCY)}</td>
                     <td className="p-4"><StatusBadge status={payment.status === 'succeeded' ? 'active' : payment.status === 'failed' ? 'suspended' : payment.status} /></td>
                     <td className="p-4 text-slate-600">{payment.card_brand ? `${payment.card_brand} •••• ${payment.card_last4}` : payment.payment_method || '—'}</td>
                   </tr>

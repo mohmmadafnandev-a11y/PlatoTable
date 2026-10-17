@@ -4,8 +4,8 @@ import { loadEnv } from 'vite'
 
 // Runs the Vercel-style handlers in `api/` under `vite dev`.
 //
-// Why this exists: the platform's server-only work (restaurant onboarding, and
-// later the Stripe checkout/portal/webhook endpoints) lives in Vercel serverless
+// Why this exists: the platform's server-only work (restaurant onboarding, the
+// Safepay checkout and webhook endpoints) lives in Vercel serverless
 // functions, and plain `vite dev` knows nothing about them. Without this, a
 // request to /api/... falls through to the SPA fallback and the endpoint returns
 // index.html, so the whole server half of the product can only be exercised by

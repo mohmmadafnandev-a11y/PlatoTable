@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { CreditCard, Download, Receipt } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { dateTime, downloadCsv, money, plainNumber } from '../lib/format'
-import { COUNTRIES } from '../../../shared/slug.js'
+import { COUNTRIES, CURRENCY } from '../../../shared/slug.js'
 import { UpcomingPayments } from './Subscriptions'
 import { Card, EmptyState, Notice, SectionHead, Spinner, StatusBadge, inputClass } from './ui'
 
@@ -41,10 +41,11 @@ export default function Transactions() {
     }
     let query = supabase
       .from('payment_transactions')
-      // `!inner` so the embedded restaurant can be filtered on: a payment always
-      // belongs to a restaurant, so this drops nothing but lets the country
-      // filter run in the database instead of over a capped page of rows.
-      .select('*, restaurants!inner(name, subdomain, country)')
+      // A left join, not `!inner`. A payment that was kept when its restaurant
+      // was removed has no restaurant to join to, and an inner join would hide
+      // exactly the rows that mode of deletion exists to preserve. The name then
+      // comes from the copy stored on the row itself (see migration 017).
+      .select('*, restaurants(name, subdomain, country)')
       .order('created_at', { ascending: false })
       .limit(500)
 
@@ -84,17 +85,18 @@ export default function Transactions() {
   }, [])
 
   const visible = rows.slice(0, limit)
-  const collected = rows
-    .filter((row) => row.status === 'succeeded')
-    .reduce((total, row) => total + Number(row.amount || 0), 0)
-  const currency = rows.find((row) => row.status === 'succeeded')?.currency || 'USD'
+  // A plain sum, because the ledger is one currency. Every amount was converted
+  // on the way in — at the webhook, the sync, or the migration that moved the
+  // platform to dollars — so there is no rate to apply here.
+  const collected = rows.filter((row) => row.status === 'succeeded').reduce((total, row) => total + Number(row.amount || 0), 0)
+  const currency = CURRENCY
 
   const exportCsv = () => downloadCsv(`transactions-${new Date().toISOString().slice(0, 10)}.csv`, rows, [
     { label: 'Date', value: (row) => dateTime(row.created_at) },
-    { label: 'Restaurant', value: (row) => row.restaurants?.name || '' },
+    { label: 'Restaurant', value: (row) => row.restaurants?.name || row.restaurant_name || '' },
     { label: 'Country', value: (row) => row.restaurants?.country || '' },
     { label: 'Amount', value: (row) => row.amount },
-    { label: 'Currency', value: (row) => row.currency },
+    { label: 'Currency', value: () => CURRENCY },
     { label: 'Status', value: (row) => row.status },
     { label: 'Method', value: (row) => row.card_brand ? `${row.card_brand} ****${row.card_last4}` : row.payment_method },
     { label: 'Provider id', value: (row) => row.provider_transaction_id },
@@ -107,7 +109,7 @@ export default function Transactions() {
       <SectionHead
         eyebrow="PAYMENT RECORDS"
         title="Transactions"
-        description="Every payment Stripe has reported. Only verified webhooks write these rows."
+        description="Every payment Safepay has reported. Only verified webhooks write these rows."
         action={
           <button onClick={exportCsv} disabled={!rows.length} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">
             <Download size={16} />Export CSV
@@ -184,13 +186,13 @@ export default function Transactions() {
                         <tr key={row.id} className="border-t border-slate-100 align-top transition hover:bg-indigo-50/40">
                           <td className="p-4 text-slate-500">
                             {dateTime(row.created_at)}
-                            <small className="mt-1 block text-xs text-slate-400">{row.provider || 'stripe'}</small>
+                            <small className="mt-1 block text-xs text-slate-400">{row.provider || 'safepay'}</small>
                           </td>
                           <td className="p-4">
-                            <strong className="block font-medium text-slate-800">{row.restaurants?.name || 'Unknown restaurant'}</strong>
-                            <small className="mt-1 block text-xs text-slate-400">{row.restaurants?.country || ''}</small>
+                            <strong className="block font-medium text-slate-800">{row.restaurants?.name || row.restaurant_name || 'Unknown restaurant'}</strong>
+                            <small className="mt-1 block text-xs text-slate-400">{row.restaurants?.country || (row.restaurants ? '' : 'Restaurant removed')}</small>
                           </td>
-                          <td className="p-4 font-medium text-slate-800">{money(row.amount, row.currency)}</td>
+                          <td className="p-4 font-medium text-slate-800">{money(row.amount, currency)}</td>
                           <td className="p-4"><StatusBadge status={row.status === 'succeeded' ? 'active' : row.status === 'failed' ? 'suspended' : row.status} /></td>
                           <td className="p-4 text-slate-600">
                             {row.card_brand ? `${row.card_brand} •••• ${row.card_last4}` : row.payment_method || '—'}
@@ -211,7 +213,8 @@ export default function Transactions() {
                   if (!row) return null
                   const fields = [
                     ['Transaction id', row.id],
-                    ['Stripe transaction', row.provider_transaction_id],
+                    ['Restaurant', row.restaurants?.name || row.restaurant_name || 'Removed'],
+                    ['Safepay reference', row.provider_transaction_id],
                     ['Subscription', row.subscription_id],
                     ['Provider', row.provider],
                     ['Payment method', row.payment_method],
@@ -230,7 +233,7 @@ export default function Transactions() {
                         ))}
                       </dl>
                       <p className="mt-4 text-xs text-slate-500">
-                        Refunds are processed in Stripe. This screen records what Stripe reports back; it never initiates one.
+                        Refunds are processed in the Safepay dashboard. This screen only records what the gateway reports back; it never initiates one.
                       </p>
                     </div>
                   )
@@ -246,7 +249,7 @@ export default function Transactions() {
             : <EmptyState
               icon={filtered ? Receipt : CreditCard}
               title={filtered ? 'No transactions match these filters' : 'No transactions yet'}
-              description={filtered ? 'Try a wider date range or clear the filters.' : 'Payments appear here once Stripe reports them through a verified webhook.'}
+              description={filtered ? 'Try a wider date range or clear the filters.' : 'Payments appear here once Safepay reports them through a verified webhook.'}
             />}
       </Card>
     </>

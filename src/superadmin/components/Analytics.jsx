@@ -1,11 +1,15 @@
 import { Activity, BarChart3, CircleDollarSign, Gauge, TrendingDown, TrendingUp, Users } from 'lucide-react'
+import { CURRENCY } from '../../../shared/slug.js'
 import { useRpc } from '../lib/data'
 import { money, plainNumber } from '../lib/format'
 import { AreaChart, BarChart } from './Charts'
 import { Card, EmptyState, Notice, SectionHead, Spinner, StatCard } from './ui'
 
 export default function Analytics() {
-  const { data, loading, error, reload } = useRpc('super_admin_analytics')
+  // MRR, ARR and ARPU are totalled in the database, in the one currency the
+  // platform bills in — so a subscription recorded in another currency before
+  // that was true is converted rather than added at face value.
+  const { data, loading, error, reload } = useRpc('super_admin_analytics', { p_currency: CURRENCY })
 
   if (loading && !data) return <Spinner label="Loading analytics" />
 
@@ -18,7 +22,7 @@ export default function Analytics() {
     )
   }
 
-  const currency = data?.currency || 'USD'
+  const currency = CURRENCY
   const planMix = data?.plan_mix || []
   const byCountry = data?.revenue_by_country || []
   const hasSignups = (data?.monthly_signups || []).some((point) => Number(point.value) > 0)
@@ -29,7 +33,7 @@ export default function Analytics() {
       <SectionHead
         eyebrow="BUSINESS INTELLIGENCE"
         title="Analytics"
-        description="Recurring revenue, retention, and where the money comes from."
+        description="Recurring revenue, retention, and where the money comes from — every figure in US dollars."
       />
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -82,15 +86,6 @@ export default function Analytics() {
             : <p className="mt-4 text-sm text-slate-500">No subscriptions yet.</p>}
         </Card>
       </section>
-
-      {!data?.currency && (
-        <div className="mt-6">
-          <Notice tone="warning">
-            No subscription is on a paid plan yet, so MRR, ARR, and ARPU read as zero and have no currency to report.
-            These figures become meaningful once a restaurant subscribes.
-          </Notice>
-        </div>
-      )}
 
       <section className="mt-6 grid gap-6 lg:grid-cols-2">
         <Card className="p-6">

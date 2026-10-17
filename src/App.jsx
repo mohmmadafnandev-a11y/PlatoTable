@@ -22,7 +22,9 @@ function ScanError({ reason = 'invalid' }) {
   return <main className="scan-error"><BrandMark size={42} /><span>{reason === 'expired' ? '⏱' : '⌁'}</span><h1>{content[0]}</h1><p>{content[1]}</p></main>
 }
 
-const localSessionKey = (token) => `palatotabale-session:${token}`
+// Keyed per table. The name was mistyped ('palatotabale') since it was written,
+// which is invisible until something needs to find a session it did not write.
+const localSessionKey = (token) => `platotable-session:${token}`
 const readLocalSession = (token, sessionToken) => {
   try {
     const session = JSON.parse(sessionStorage.getItem(localSessionKey(token)) || 'null')
@@ -75,8 +77,8 @@ function ScanRoute() {
 
 // The /admin branch is decided here rather than by route ranking, because the
 // router cannot know that "login" and "settings" are Super Admin pages while
-// "daynight" is a restaurant. Reserved slugs belong to the platform; anything
-// else is a tenant slug.
+// "spice-garden" is a restaurant. Reserved slugs belong to the platform;
+// anything else is a tenant slug.
 function AdminArea() {
   const { '*': rest = '' } = useParams()
   const segments = rest.split('/').filter(Boolean)

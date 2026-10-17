@@ -1,10 +1,49 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { KeyRound, Mail, Save, Settings2, ShieldCheck, UserRound, Wrench } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { describeAuthError } from '../../lib/auth-errors'
 import { usePlatformSettings, logActivity } from '../lib/data'
-import { CURRENCIES, PASSWORD_MIN, passwordError } from '../../../shared/slug.js'
+import { safepayReadiness } from '../lib/billing-api'
+import { CURRENCY, PASSWORD_MIN, passwordError } from '../../../shared/slug.js'
 import { Card, Field, Notice, SectionHead, Spinner, inputClass } from './ui'
+
+// Whether this deployment can charge a card at all.
+//
+// There is deliberately no mode badge anywhere in the product: the screens look
+// the same whichever keys a deployment holds, and announcing the mode was a
+// claim the browser could get wrong and a customer should never read. The one
+// thing worth knowing when configuring the platform is whether the variables
+// are present, and which one is not — so the server answers exactly that.
+function PaymentReadiness() {
+  const [state, setState] = useState(null)
+  useEffect(() => {
+    let active = true
+    safepayReadiness()
+      .then((result) => { if (active) setState(result) })
+      .catch(() => { if (active) setState({ configured: false, missing: [] }) })
+    return () => { active = false }
+  }, [])
+
+  const configured = state?.configured === true
+  const missing = state?.missing || []
+  const message = missing.includes('SAFEPAY_SECRET_KEY')
+    ? `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing, so checkout cannot be opened and webhook deliveries cannot be verified.`
+    : `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing, so card payments work but webhook deliveries cannot be verified.`
+
+  return (
+    <Card className="p-6">
+      <h2 className="font-semibold text-slate-900">Payment readiness</h2>
+      <p className="mt-1 text-sm text-slate-500">Read from the Safepay keys this deployment holds.</p>
+      <div className="mt-5">
+        {!state
+          ? <Spinner label="Checking payment configuration" />
+          : configured
+            ? <Notice tone="success"><strong className="font-semibold">Payments are configured.</strong> Checkout can be opened and webhooks can be verified.</Notice>
+            : <Notice tone="danger"><strong className="font-semibold">Payments are not configured.</strong> {missing.length ? message : 'The server could not be reached.'}</Notice>}
+      </div>
+    </Card>
+  )
+}
 
 const TABS = [
   { id: 'general', label: 'General', icon: Settings2 },
@@ -160,8 +199,8 @@ function PlatformForm({ settings, save, superAdminId }) {
     platform_name: settings.platform_name || '',
     support_email: settings.support_email || '',
     support_phone: settings.support_phone || '',
-    default_currency: settings.default_currency || 'PKR',
     default_trial_days: settings.default_trial_days ?? 7,
+    trial_warning_days: settings.trial_warning_days ?? 3,
     grace_period_days: settings.grace_period_days ?? 3,
     trial_enabled: !!settings.trial_enabled,
     notifications_enabled: !!settings.notifications_enabled,
@@ -181,6 +220,7 @@ function PlatformForm({ settings, save, superAdminId }) {
       support_email: form.support_email.trim() || null,
       support_phone: form.support_phone.trim() || null,
       default_trial_days: Number(form.default_trial_days) || 0,
+      trial_warning_days: Number(form.trial_warning_days) || 0,
       grace_period_days: Number(form.grace_period_days) || 0,
       maintenance_message: form.maintenance_message.trim() || null,
     })
@@ -204,10 +244,8 @@ function PlatformForm({ settings, save, superAdminId }) {
           <Field label="Platform name">
             <input className={inputClass} value={form.platform_name} onChange={(event) => update({ platform_name: event.target.value })} />
           </Field>
-          <Field label="Default currency">
-            <select className={inputClass} value={form.default_currency} onChange={(event) => update({ default_currency: event.target.value })}>
-              {CURRENCIES.map((code) => <option key={code} value={code}>{code}</option>)}
-            </select>
+          <Field label="Billing currency" hint={`Fixed at ${CURRENCY}. Every plan, invoice, and report is in dollars.`}>
+            <input className={inputClass} value={CURRENCY} readOnly disabled />
           </Field>
           <Field label="Support email" hint="Shown publicly for onboarding and invoices.">
             <input type="email" className={inputClass} value={form.support_email} onChange={(event) => update({ support_email: event.target.value })} placeholder="support@example.com" />
@@ -221,9 +259,12 @@ function PlatformForm({ settings, save, superAdminId }) {
       <Card className="p-6">
         <h2 className="font-semibold text-slate-900">Trials & billing</h2>
         <p className="mt-1 text-sm text-slate-500">Defaults applied when a restaurant is onboarded.</p>
-        <div className="mt-6 grid gap-4 sm:grid-cols-2">
-          <Field label="Default trial days">
+        <div className="mt-6 grid gap-4 sm:grid-cols-3">
+          <Field label="Default trial days" hint="Seeds the onboarding form.">
             <input type="number" min="0" max="90" className={inputClass} value={form.default_trial_days} onChange={(event) => update({ default_trial_days: event.target.value })} />
+          </Field>
+          <Field label="Warn before trial ends (days)" hint="How early “your trial ends soon” starts being said.">
+            <input type="number" min="0" max="30" className={inputClass} value={form.trial_warning_days} onChange={(event) => update({ trial_warning_days: event.target.value })} />
           </Field>
           <Field label="Grace period (days)" hint="How long a restaurant keeps working after a failed payment.">
             <input type="number" min="0" max="30" className={inputClass} value={form.grace_period_days} onChange={(event) => update({ grace_period_days: event.target.value })} />
@@ -299,11 +340,14 @@ export default function SystemSettings({ profile }) {
             </Notice>
           )}
           {settings && (
-            <PlatformForm
-              settings={settings}
-              save={save}
-              superAdminId={profile?.id}
-            />
+            <div className="grid gap-6">
+              <PaymentReadiness />
+              <PlatformForm
+                settings={settings}
+                save={save}
+                superAdminId={profile?.id}
+              />
+            </div>
           )}
         </>
       )}

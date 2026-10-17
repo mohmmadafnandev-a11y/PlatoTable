@@ -6,6 +6,7 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react'
+import { CURRENCY } from '../../../shared/slug.js'
 import { useDashboard } from '../lib/data'
 import { money, plainNumber, relativeTime, revenueTrend } from '../lib/format'
 import { AreaChart, BarChart, PlanDistribution } from './Charts'
@@ -47,7 +48,10 @@ function buildAlerts(data) {
 }
 
 export default function Dashboard({ navigate }) {
-  const { data, loading, error, reload } = useDashboard()
+  // Every figure is a dollar figure, so the currency is passed explicitly rather
+  // than chosen: the database converts before it adds, and there is nothing left
+  // for the browser to decide.
+  const { data, loading, error, reload } = useDashboard(CURRENCY)
 
   if (loading && !data) return <Spinner label="Loading platform overview" />
 
@@ -71,7 +75,7 @@ export default function Dashboard({ navigate }) {
   }
 
   const revenue = data.revenue || {}
-  const currency = revenue.currency || 'USD'
+  const currency = CURRENCY
   const subscriptions = data.subscriptions || {}
   const needAttention = (subscriptions.past_due || 0) + (subscriptions.suspended || 0)
   const alerts = buildAlerts(data)
@@ -168,7 +172,7 @@ export default function Dashboard({ navigate }) {
                 <div>
                   <CircleDollarSign className="mx-auto text-slate-300" size={26} />
                   <p className="mt-3 text-sm font-medium text-slate-600">No revenue yet</p>
-                  <p className="mt-1 text-xs text-slate-500">Verified Stripe payments will populate this chart.</p>
+                  <p className="mt-1 text-xs text-slate-500">Verified Safepay payments will populate this chart.</p>
                 </div>
               </div>
             )}

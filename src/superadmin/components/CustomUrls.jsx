@@ -8,18 +8,47 @@ import { Card, EmptyState, Field, Notice, SectionHead, Spinner, inputClass } fro
 // The platform serves restaurants by path, so these are the canonical links.
 // A custom domain is recorded for the day a restaurant points its own domain
 // at the platform; nothing in the app depends on it being set.
+//
+// The host is the one the operator is looking at, not the configured canonical
+// base: a link shown on localhost must say localhost, or clicking it opens a
+// deployment the restaurant does not exist on. Printed QR codes keep using the
+// canonical base (src/lib/restaurant-config.js).
 function defaultUrls(slug) {
-  const base = import.meta.env.VITE_CANONICAL_BASE_URL || window.location.origin
+  const base = (window.location.origin || import.meta.env.VITE_CANONICAL_BASE_URL || '').replace(/\/+$/, '')
   return {
     admin_url: slug ? `${base}/admin/${slug}` : '',
     user_url: slug ? `${base}/${slug}` : '',
   }
 }
 
+const canonicalBase = (import.meta.env.VITE_CANONICAL_BASE_URL || '').replace(/\/+$/, '')
+
+/**
+ * The link to show for a restaurant: the one stored, unless it is a platform
+ * link that has gone stale.
+ *
+ * Restaurant URLs are written once, at onboarding, from whatever host the
+ * operator was using at that moment. A row saved that way says
+ * `https://platotable.vercel.app/admin/acme` forever, so opening the panel on
+ * localhost — or on a new domain after a move — showed a link to somewhere the
+ * restaurant may not exist. A stored link is only treated as the operator's own
+ * when it points at a host other than the configured platform base; anything on
+ * the base is regenerated for the host in front of them.
+ */
+function showUrl(stored, fallback) {
+  if (!stored) return fallback
+  try {
+    return canonicalBase && new URL(stored).origin === canonicalBase ? fallback : stored
+  } catch {
+    return stored
+  }
+}
+
 function UrlForm({ restaurant, onSaved, onCancel, superAdminId }) {
+  const fallback = defaultUrls(restaurant.subdomain)
   const [form, setForm] = useState(() => ({
-    admin_url: restaurant.urls?.[0]?.admin_url || defaultUrls(restaurant.subdomain).admin_url,
-    user_url: restaurant.urls?.[0]?.user_url || defaultUrls(restaurant.subdomain).user_url,
+    admin_url: showUrl(restaurant.urls?.[0]?.admin_url, fallback.admin_url),
+    user_url: showUrl(restaurant.urls?.[0]?.user_url, fallback.user_url),
     custom_domain: restaurant.urls?.[0]?.custom_domain || '',
     is_primary: restaurant.urls?.[0]?.is_primary ?? true,
   }))
@@ -125,8 +154,8 @@ export default function CustomUrls({ profile }) {
               {restaurants.map((restaurant) => {
                 const urls = restaurant.urls?.[0]
                 const fallback = defaultUrls(restaurant.subdomain)
-                const adminUrl = urls?.admin_url || fallback.admin_url
-                const publicUrl = urls?.user_url || fallback.user_url
+                const adminUrl = showUrl(urls?.admin_url, fallback.admin_url)
+                const publicUrl = showUrl(urls?.user_url, fallback.user_url)
                 return (
                   <Card key={restaurant.id} className="p-5">
                     <div className="flex flex-wrap items-start justify-between gap-3">

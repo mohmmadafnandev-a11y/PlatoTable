@@ -4,11 +4,17 @@ import { BarChart3, Bell, Building2, ChevronDown, CircleDollarSign, CreditCard, 
 import { supabase } from './lib/supabase'
 import { saPath } from '../lib/tenant'
 import { describeAuthError } from '../lib/auth-errors'
+import { MAX_LOGIN_ATTEMPTS, clearLoginLock, registerFailedAttempt, useLoginLock } from '../lib/login-lock'
+import { isRecoveryLink, sendPasswordReset } from '../lib/password-recovery'
+import { resolveAccountDestination } from '../lib/account-role'
+import ResetPassword from '../components/ResetPassword'
 import './App.css'
 import './theme.css'
 import ActivityLogs from './components/ActivityLogs'
 import Analytics from './components/Analytics'
 import CustomUrls from './components/CustomUrls'
+import NotificationBell from './components/NotificationBell'
+import { armNotificationSound } from '../lib/notification-sound'
 import Notifications from './components/Notifications'
 import Dashboard from './components/Dashboard'
 import Plans from './components/Plans'
@@ -23,8 +29,9 @@ import { useTheme } from '../lib/theme'
 import { useSidebar } from './lib/layout'
 import RestaurantOnboarding from './components/RestaurantOnboarding'
 import BrandMark from '../components/BrandMark'
+import { APP_NAME } from '../../shared/brand.js'
 
-const appName = import.meta.env.VITE_APP_NAME || 'Plato Table'
+const appName = APP_NAME
 
 // Every Super Admin screen lives under /admin in the merged bundle. Prefixing
 // navigation in one place keeps each page component's own paths untouched.
@@ -58,6 +65,12 @@ function App() {
   const [authError, setAuthError] = useState('')
   const { theme, toggle: toggleTheme } = useTheme('platotable-super-admin-theme')
 
+  // Armed here, on the sign-in screen, rather than only inside the bell: the
+  // click that signs in is the one gesture guaranteed to happen, and a chime for
+  // an alert that is already waiting should not need a second, unrelated click to
+  // become audible.
+  useEffect(() => { armNotificationSound() }, [])
+
   useEffect(() => {
     if (!supabase) return undefined
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null))
@@ -68,13 +81,28 @@ function App() {
   useEffect(() => {
     let alive = true
     if (!session || !supabase) return undefined
-    supabase.from('super_admins').select('id, name, email, role, is_active').eq('user_id', session.user.id).maybeSingle().then(({ data, error }) => {
+    supabase.from('super_admins').select('id, name, email, role, is_active').eq('user_id', session.user.id).maybeSingle().then(async ({ data, error }) => {
       if (!alive) return
-      if (error || !data?.is_active) { setAuthError(error ? 'Super Admin access has not been configured yet.' : 'Your Super Admin account is inactive.'); setProfile(null) }
+      if (error || !data?.is_active) {
+        // A restaurant owner who opens the platform sign-in URL belongs in their
+        // own workspace, not behind a staff-only error. The tenant slug is read
+        // at module load, so this has to be a real navigation rather than a
+        // router push — which is also why the owner never mounts this shell.
+        const destination = await resolveAccountDestination(supabase, session.user.id)
+        if (!alive) return
+        if (destination.kind === 'owner') { window.location.replace(`/admin/${destination.slug}`); return }
+        setAuthError(destination.kind === 'staff-inactive' || !error ? 'Your Super Admin account is inactive.' : 'Super Admin access has not been configured yet.'); setProfile(null)
+      }
       else { setAuthError(''); setProfile(data) }
     })
     return () => { alive = false }
   }, [session])
+
+  // A reset link lands on /admin/login with a recovery session attached. It is
+  // answered here, before anything else, because the ordinary sign-in form would
+  // otherwise tell the operator their password is wrong — which is exactly the
+  // dead end the reset link was sent to get them out of.
+  if (isRecoveryLink()) return <div className="sa-scope" data-theme={theme}><ResetPassword loginPath={saPath('/login')} surface="platform" /></div>
 
   // Hold on the loading screen until the platform-staff check has answered.
   // Redirecting on an unanswered check is what discarded the requested URL.
@@ -88,15 +116,74 @@ function App() {
   </Routes></div>
 }
 
-function LoadingScreen() { return <main className="grid min-h-screen place-items-center bg-slate-50 text-sm font-medium text-slate-600"><div className="flex items-center gap-3"><span className="h-5 w-5 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />Opening {appName}…</div></main> }
+function LoadingScreen() { return <main className="sa-login-page grid min-h-screen place-items-center text-sm font-medium text-[#57514a]"><div className="flex items-center gap-3"><span className="h-5 w-5 animate-spin rounded-full border-2 border-[#e5dfd5] border-t-[#a8451f]" />Opening {appName}…</div></main> }
 
 function Login({ error }) {
-  const navigate = useSuperAdminNavigate(); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [showPassword, setShowPassword] = useState(false); const [remember, setRemember] = useState(true); const [message, setMessage] = useState(''); const [loading, setLoading] = useState(false)
-  const submit = async (event) => { event.preventDefault(); if (!supabase) return setMessage('Add the public Supabase variables to .env.local before signing in.'); setLoading(true); setMessage(''); const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password }); if (signInError) { setMessage(describeAuthError(signInError).message); setLoading(false); return } if (!remember) sessionStorage.setItem('platotable-session-only', 'true'); navigate('/dashboard') }
-  const reset = async () => { if (!email.trim()) return setMessage('Enter your email address first, then choose password reset.'); if (!supabase) return; const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: `${window.location.origin}${saPath('/login')}` }); setMessage(resetError ? 'Could not send the reset email. Please try again.' : 'Password reset instructions were sent if this account exists.') }
-  return <main className="login-glow grid min-h-screen place-items-center p-5"><section className="grid w-full max-w-5xl overflow-hidden rounded-[28px] bg-white shadow-2xl shadow-slate-950/20 lg:grid-cols-[.9fr_1.1fr]"><aside className="login-art relative hidden min-h-[620px] overflow-hidden p-11 text-white lg:flex lg:flex-col lg:justify-between"><div className="relative z-10 flex items-center gap-3 text-lg font-bold"><BrandMark size={40} />{appName}</div><div className="relative z-10 max-w-sm"><span className="text-xs font-semibold tracking-[.2em] text-indigo-200">PLATFORM CONTROL</span><h1 className="mt-5 text-5xl font-semibold leading-[1.04] tracking-tight">Every restaurant.<br /><span className="text-emerald-300">One clear view.</span></h1><p className="mt-5 text-sm leading-6 text-slate-200">Manage restaurants, subscriptions, revenue, and support from one secure workspace.</p></div><div className="relative z-10 flex items-center gap-2 text-xs font-medium text-slate-300"><ShieldCheck size={16} /> Enterprise-grade access controls</div></aside><section className="flex min-h-[620px] items-center justify-center p-7 sm:p-12"><form className="w-full max-w-sm" onSubmit={submit}><div className="mb-9">{/* The tile carries its own display rule, so visibility lives on a wrapper
-              rather than on the tile itself. */}
-            <div className="mb-6 flex lg:hidden"><BrandMark size={44} /></div><span className="text-xs font-semibold tracking-[.16em] text-indigo-600">SECURE ACCESS</span><h2 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Welcome back</h2><p className="mt-2 text-sm text-slate-500">Sign in to the {appName} Super Admin Panel.</p></div>{(message || error) && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{message || error}</div>}<label className="mb-5 grid gap-2 text-sm font-medium text-slate-700">Email address<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@platotable.com" className="h-12 rounded-lg border border-slate-300 px-3 text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" /></label><label className="mb-3 grid gap-2 text-sm font-medium text-slate-700">Password<div className="relative"><input required type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" className="h-12 w-full rounded-lg border border-slate-300 px-3 pr-16 text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" /><button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-2 px-2 text-xs font-semibold text-indigo-600">{showPassword ? 'Hide' : 'Show'}</button></div></label><div className="mb-7 flex items-center justify-between gap-3"><label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} className="h-4 w-4 rounded border-slate-300 accent-indigo-600" />Remember me</label><button type="button" onClick={reset} className="text-sm font-semibold text-indigo-600 hover:text-indigo-800">Forgot password?</button></div><button disabled={loading} className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 transition hover:bg-indigo-700 active:scale-[.99] disabled:opacity-60">{loading && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />}{loading ? 'Signing in…' : 'Sign in securely'}</button><p className="mt-7 flex items-center justify-center gap-2 text-xs text-slate-500"><ShieldCheck size={15} className="text-emerald-600" />Secure, restricted Super Admin access</p></form></section></section></main>
+  const navigate = useSuperAdminNavigate(); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [showPassword, setShowPassword] = useState(false); const [remember, setRemember] = useState(true); const [message, setMessage] = useState(''); const [sent, setSent] = useState(''); const [loading, setLoading] = useState(false)
+  // The same device lock the restaurant workspace uses: three attempts, an hour.
+  const { lock, clock: lockTime } = useLoginLock('platform')
+  const field = 'sa-login-field h-12 w-full rounded-lg px-3 text-sm transition'
+  // This form is not staff-only. A restaurant owner who signs in here is sent
+  // to their own workspace and never reaches the platform shell; a platform
+  // administrator is sent to the dashboard as before.
+  const submit = async (event) => { event.preventDefault(); if (lock) return; if (!supabase) return setMessage('Add the public Supabase variables to .env.local before signing in.'); setLoading(true); setMessage(''); setSent(''); const { data: signIn, error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password }); if (signInError) { const described = describeAuthError(signInError); if (!described.isCredentialFailure) { setMessage(described.message); setLoading(false); return } const { lock: nextLock, remaining } = registerFailedAttempt('platform'); setMessage(nextLock ? `This device is locked for one hour after ${MAX_LOGIN_ATTEMPTS} failed attempts.` : `${described.message} ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`); setPassword(''); setLoading(false); return } clearLoginLock('platform'); if (!remember) sessionStorage.setItem('platotable-session-only', 'true'); const destination = await resolveAccountDestination(supabase, signIn?.user?.id); if (destination.kind === 'owner') { window.location.assign(`/admin/${destination.slug}`); return } if (destination.kind !== 'staff') { await supabase.auth.signOut(); setMessage(destination.kind === 'staff-inactive' ? 'Your Super Admin account is inactive.' : 'This account is not attached to a restaurant or a Super Admin team. Contact the platform owner.'); setPassword(''); setLoading(false); return } navigate('/dashboard') }
+  // Sends the recovery mail that lands on this same page; the reset screen the
+  // link opens is what actually sets the new password.
+  const reset = async () => { if (!email.trim()) return setMessage('Enter your email address first, then choose “Forgot password”.'); setLoading(true); setMessage(''); setSent(''); const { error: resetError } = await sendPasswordReset(email.trim(), `${window.location.origin}${saPath('/login')}`); setLoading(false); setSent(resetError ? `The reset email could not be sent: ${resetError}` : 'If that address has an account, a reset link is on its way. Check the spam folder too.') }
+  // The sign-in screen wears the landing page's palette — cream, warm hairline,
+  // brick accent, Playfair Display — rather than the dark indigo panel it used to
+  // have. It is the first screen anyone sees, and it was the only one that looked
+  // like a different product than the site that linked to it.
+  return <main className="sa-login-page grid min-h-screen place-items-center p-5">
+    <section className="sa-login-card grid w-full max-w-5xl overflow-hidden rounded-[28px] bg-white shadow-2xl shadow-[#1b1a18]/10 lg:grid-cols-[.9fr_1.1fr]">
+      <aside className="sa-login-art relative hidden min-h-[620px] overflow-hidden p-11 lg:flex lg:flex-col lg:justify-between">
+        <div className="relative z-10 flex items-center gap-3"><BrandMark size={40} /><span className="sa-login-display text-lg">{appName}</span></div>
+        <div className="relative z-10 max-w-sm">
+          <span className="sa-login-kicker text-xs font-semibold">PLATFORM CONTROL</span>
+          <h1 className="sa-login-display mt-5 text-5xl leading-[1.04]">Every restaurant.<br /><em>One clear view.</em></h1>
+          <p className="mt-5 text-sm leading-6 text-[#57514a]">Manage restaurants, subscriptions, revenue, and support from one secure workspace.</p>
+        </div>
+        <div className="relative z-10 flex items-center gap-2 text-xs font-medium text-[#8b837a]"><ShieldCheck size={16} className="text-[#a8451f]" /> Enterprise-grade access controls</div>
+      </aside>
+
+      <section className="flex min-h-[620px] items-center justify-center p-7 sm:p-12">
+        <form className="w-full max-w-sm" onSubmit={submit}>
+          <div className="mb-9">
+            {/* The tile carries its own display rule, so visibility lives on a wrapper
+                rather than on the tile itself. */}
+            <div className="mb-6 flex lg:hidden"><BrandMark size={44} /></div>
+            <span className="sa-login-kicker text-xs font-semibold">SECURE ACCESS</span>
+            <h2 className="sa-login-display mt-2 text-3xl">Welcome back</h2>
+            <p className="mt-2 text-sm text-[#57514a]">Sign in to the {appName} Super Admin Panel.</p>
+          </div>
+
+          {(message || error || lock) && <div className="mb-5 rounded-xl border border-[#f2d3c9] bg-[#fdf1ea] px-4 py-3 text-sm text-[#9e382a]" role="alert">{lock ? `Too many failed attempts. This device is locked for ${lockTime}.` : (message || error)}</div>}
+          {sent && <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{sent}</div>}
+
+          <label className="mb-5 grid gap-2 text-sm font-medium text-[#57514a]">Email address
+            <input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" className={field} />
+          </label>
+          <label className="mb-3 grid gap-2 text-sm font-medium text-[#57514a]">Password
+            <div className="relative">
+              <input required type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" className={`${field} pr-16`} />
+              <button type="button" onClick={() => setShowPassword(!showPassword)} className="sa-login-link absolute inset-y-0 right-2 px-2 text-xs font-semibold">{showPassword ? 'Hide' : 'Show'}</button>
+            </div>
+          </label>
+          <div className="mb-7 flex items-center justify-between gap-3">
+            <label className="flex items-center gap-2 text-sm text-[#57514a]"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} className="sa-login-check h-4 w-4 rounded" />Remember me</label>
+            <button type="button" onClick={reset} disabled={loading} className="sa-login-link text-sm font-semibold disabled:opacity-60">Forgot password?</button>
+          </div>
+
+          <button disabled={loading || Boolean(lock)} className="sa-login-submit flex h-12 w-full items-center justify-center gap-2 rounded-lg text-sm font-semibold transition active:scale-[.99] disabled:opacity-60">
+            {loading && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />}{loading ? 'Signing in…' : lock ? `Try again in ${lockTime}` : 'Sign in securely'}
+          </button>
+
+          <p className="mt-7 flex items-center justify-center gap-2 text-xs text-[#8b837a]"><ShieldCheck size={15} className="text-[#a8451f]" />{MAX_LOGIN_ATTEMPTS} incorrect passwords lock this browser for one hour.</p>
+          <p className="mt-3 text-center text-xs leading-5 text-[#8b837a]">Restaurant owner? Sign in with the same form — you are taken to your own restaurant workspace, never this panel.</p>
+        </form>
+      </section>
+    </section>
+  </main>
 }
 
 function Shell({ profile, theme, toggleTheme }) {
@@ -191,7 +278,7 @@ function Shell({ profile, theme, toggleTheme }) {
       </div>
     </aside>
     {mobileOpen && <button className="fixed inset-0 z-20 bg-slate-950/25 md:hidden" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
-    <section className="sa-content min-h-screen"><header className="sticky top-0 z-10 flex h-17 items-center gap-4 border-b border-slate-200 bg-white/90 px-5 backdrop-blur sm:px-8"><button onClick={() => setMobileOpen(true)} className="grid h-10 w-10 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 md:hidden" aria-label="Open navigation"><Menu size={21} /></button><label className="hidden max-w-sm flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-slate-400 sm:flex"><Search size={17} /><input className="h-10 w-full bg-transparent text-sm outline-none placeholder:text-slate-400" placeholder="Search restaurants, payments…" /></label><div className="ml-auto flex items-center gap-2"><button onClick={toggleTheme} className="grid h-10 w-10 place-items-center rounded-full text-slate-600 hover:bg-slate-100" aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} aria-pressed={theme === 'dark'}>{theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}</button><button className="relative grid h-10 w-10 place-items-center rounded-full text-slate-600 hover:bg-slate-100" aria-label="Notifications"><Bell size={19} /><span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" /></button><div className="relative"><button onClick={() => setMenuOpen(!menuOpen)} className="flex items-center gap-2 rounded-lg p-1.5 hover:bg-slate-100"><span className="grid h-8 w-8 place-items-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">{(profile.name || profile.email).slice(0, 2).toUpperCase()}</span><span className="hidden text-left sm:block"><strong className="block max-w-32 truncate text-xs">{profile.name || 'Platform admin'}</strong><small className="text-[11px] capitalize text-slate-500">{profile.role.replace('_', ' ')}</small></span><ChevronDown size={15} className="text-slate-500" /></button>{menuOpen && <div className="absolute right-0 top-12 w-48 rounded-xl border border-slate-200 bg-white p-1 shadow-xl"><button onClick={signOut} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"><LogOut size={16} />Sign out</button></div>}</div></div></header><div className="dashboard-enter mx-auto max-w-7xl p-5 sm:p-8">{content}</div></section></main>
+    <section className="sa-content min-h-screen"><header className="sticky top-0 z-10 flex h-17 items-center gap-4 border-b border-slate-200 bg-white/90 px-5 backdrop-blur sm:px-8"><button onClick={() => setMobileOpen(true)} className="grid h-10 w-10 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 md:hidden" aria-label="Open navigation"><Menu size={21} /></button><label className="hidden max-w-sm flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-slate-400 sm:flex"><Search size={17} /><input className="h-10 w-full bg-transparent text-sm outline-none placeholder:text-slate-400" placeholder="Search restaurants, payments…" /></label><div className="ml-auto flex items-center gap-2"><button onClick={toggleTheme} className="grid h-10 w-10 place-items-center rounded-full text-slate-600 hover:bg-slate-100" aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} aria-pressed={theme === 'dark'}>{theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}</button><NotificationBell navigate={navigate} /><div className="relative"><button onClick={() => setMenuOpen(!menuOpen)} className="flex items-center gap-2 rounded-lg p-1.5 hover:bg-slate-100"><span className="grid h-8 w-8 place-items-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">{(profile.name || profile.email).slice(0, 2).toUpperCase()}</span><span className="hidden text-left sm:block"><strong className="block max-w-32 truncate text-xs">{profile.name || 'Platform admin'}</strong><small className="text-[11px] capitalize text-slate-500">{profile.role.replace('_', ' ')}</small></span><ChevronDown size={15} className="text-slate-500" /></button>{menuOpen && <div className="absolute right-0 top-12 w-48 rounded-xl border border-slate-200 bg-white p-1 shadow-xl"><button onClick={signOut} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"><LogOut size={16} />Sign out</button></div>}</div></div></header><div className="dashboard-enter mx-auto max-w-7xl p-5 sm:p-8">{content}</div></section></main>
 }
 
 

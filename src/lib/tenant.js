@@ -35,7 +35,7 @@ export function slugFromSubdomain(hostname = '') {
   if (!host || host === 'localhost' || /^\d+(\.\d+){3}$/.test(host)) return ''
   if (SHARED_HOSTS.some((base) => host === base || host.endsWith(`.${base}`))) return ''
   const labels = host.split('.')
-  // A tenant subdomain needs a real domain after it: daynight.platotable.com.
+  // A tenant subdomain needs a real domain after it: spice-garden.platotable.com.
   if (labels.length < 3) return ''
   const [first] = labels
   if (first === 'www' || first === ADMIN_LABEL) return ''

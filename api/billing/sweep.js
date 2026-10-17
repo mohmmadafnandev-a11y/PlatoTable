@@ -1,6 +1,12 @@
-import { createClient } from '@supabase/supabase-js'
-
-const admin = createClient(process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+import { admin } from '../_lib/admin.js'
+// The platform bills its own subscriptions now (Safepay's Subscriptions product
+// cannot be used — see _lib/safepay.js), so the two halves of the clock run here:
+// a subscription whose paid period has ended and whose renewal is switched on is
+// charged against its saved card, and one whose renewal was switched off is closed
+// once the days it paid for are over. This is the platform's only scheduled entry
+// point, which makes the sweep the right place for both.
+import { chargeDueSubscriptions } from '../_lib/safepay-renewals.js'
+import { cancelDueSubscriptions } from '../safepay/manage.js'
 
 // The billing sweep, on a schedule.
 //
@@ -60,6 +66,24 @@ export default async function handler(request, response) {
     const { data, error } = await admin.rpc('billing_sweep', { p_dry_run: dryRun })
     if (error) return response.status(500).json({ error: error.message })
 
+    // The jobs that must actually reach Safepay: charge the renewals that are due,
+    // then close the subscriptions that asked not to be renewed. A dry run touches
+    // neither, for the same reason it does not suspend anything — a charge cannot be
+    // undone by a second run.
+    const renewals = dryRun
+      ? { charged: 0, dry_run: true }
+      : await chargeDueSubscriptions(admin).catch((failure) => {
+        console.error('[billing/sweep] due renewals failed:', failure?.message)
+        return { charged: 0, error: failure?.message }
+      })
+
+    const cancellations = dryRun
+      ? { cancelled: 0, dry_run: true }
+      : await cancelDueSubscriptions(admin).catch((failure) => {
+        console.error('[billing/sweep] due cancellations failed:', failure?.message)
+        return { cancelled: 0, error: failure?.message }
+      })
+
     if (!dryRun && staff) {
       await admin.from('activity_logs').insert({
         super_admin_id: null,
@@ -68,7 +92,7 @@ export default async function handler(request, response) {
       })
     }
 
-    return response.status(200).json({ ok: true, triggered_by: cron ? 'cron' : 'platform admin', result: data })
+    return response.status(200).json({ ok: true, triggered_by: cron ? 'cron' : 'platform admin', result: data, renewals, cancellations })
   } catch (error) {
     console.error('[billing/sweep] failed:', error)
     return response.status(500).json({ error: error?.message || 'The billing sweep could not run.' })

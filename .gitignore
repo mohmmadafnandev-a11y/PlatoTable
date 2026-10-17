@@ -31,3 +31,14 @@ super_admin/superadmin/Stripe.md
 super_admin/superadmin/supabase.md
 *secrets*.md
 *keys*.md
+
+# A second net under the .env rules above: key files that are not .env shaped.
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+service-account*.json
+
+# Local tooling markers
+.freebuff/

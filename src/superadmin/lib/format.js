@@ -13,11 +13,14 @@ export const STATUS_TONE = {
   unconfigured: 'bg-slate-100 text-slate-600',
 }
 
-export function money(amount, currency = 'USD') {
+export function money(amount, currency = 'PKR') {
   const value = Number(amount ?? 0)
-  const code = (currency || 'USD').toUpperCase()
+  const code = (currency || 'PKR').toUpperCase()
   try {
-    return new Intl.NumberFormat(undefined, {
+    // Rupees are pinned to en-PK so the figure reads "Rs 2,000" the way the price
+    // is spoken here, rather than whatever symbol an arbitrary browser locale
+    // picks for PKR.
+    return new Intl.NumberFormat(code === 'PKR' ? 'en-PK' : undefined, {
       style: 'currency',
       currency: code,
       maximumFractionDigits: value % 1 === 0 ? 0 : 2,
