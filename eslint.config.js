@@ -19,9 +19,9 @@ export default defineConfig([
     },
   },
   {
-    // Vercel serverless functions and the dev API middleware run in Node, not
-    // in the browser.
-    files: ['api/**/*.js', 'scripts/**/*.js'],
+    // The serverless handlers (server/), the catch-all function that dispatches
+    // to them (api/), and the dev API middleware run in Node, not in the browser.
+    files: ['api/**/*.js', 'server/**/*.js', 'scripts/**/*.js'],
     languageOptions: { globals: globals.node },
   },
 ])

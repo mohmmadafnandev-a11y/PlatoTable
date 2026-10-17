@@ -28,7 +28,7 @@ export const deletePlan = (id) => postBilling('/api/safepay/plans', { action: 'd
 export const syncSubscription = (restaurantId) => postBilling('/api/safepay/sync', { restaurantId })
 
 // Starts a subscription: opens Safepay's hosted card page and has the platform
-// take the first period itself once the card is confirmed (see api/safepay/checkout.js).
+// take the first period itself once the card is confirmed (see server/safepay/checkout.js).
 // The amount is resolved on the server from the plan, so nothing the browser sends
 // can change what is charged.
 export const startSubscription = (restaurantId, planId) => postBilling('/api/safepay/checkout', { restaurantId, planId })

@@ -37,12 +37,21 @@ export const config = { api: { bodyParser: false } }
 /**
  * The request body as bytes.
  *
- * Vercel hands a raw stream because this module turns the body parser off. The local
- * dev shim hands a parsed object instead (it never had a stream to give), so the
- * object is re-serialised — which is still enough to check the `data`-based signature,
- * and therefore enough to exercise the whole endpoint without a public URL.
+ * The catch-all router (`api/[...path].js`) reads the stream once and keeps the
+ * raw bytes on `request.rawBody`, because the HMAC is computed over exactly what
+ * Safepay sent — a re-serialisation would differ in whitespace and key order. The
+ * local dev shim hands a parsed object instead (it never had a stream to give),
+ * so the object is re-serialised — which is still enough to check the `data`-based
+ * signature, and therefore enough to exercise the whole endpoint without a public
+ * URL. A runtime that parses before the router ever sees the request ends up on
+ * the same fallback.
  */
 const readRawBody = (request) => new Promise((resolve) => {
+  if (request?.rawBody !== undefined) {
+    const raw = request.rawBody
+    resolve(Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw || ''), 'utf8'))
+    return
+  }
   if (!request || typeof request.on !== 'function') {
     const body = request?.body
     resolve(body && typeof body === 'object' ? Buffer.from(JSON.stringify(body), 'utf8') : Buffer.alloc(0))

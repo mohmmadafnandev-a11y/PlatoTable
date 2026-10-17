@@ -363,7 +363,7 @@ export function SubscriptionDetail({ navigate, id, profile }) {
   // Opens the hosted card page. The price is resolved on the server from the
   // plan, so the amount charged never depends on anything the browser sends, and
   // the first period is charged by the platform itself the moment Safepay
-  // confirms the card — see api/safepay/checkout.js for why the hosted *payment*
+  // confirms the card — see server/safepay/checkout.js for why the hosted *payment*
   // page cannot be used for this.
   const beginCheckout = async () => {
     if (!subscription.plan_id) return setFeedback({ tone: 'warning', text: 'Choose a catalogue plan before starting a Safepay subscription.' })
@@ -381,7 +381,7 @@ export function SubscriptionDetail({ navigate, id, profile }) {
     }
   }
 
-  // The platform bills its own subscriptions (see api/_lib/safepay.js for why), so
+  // The platform bills its own subscriptions (see server/_lib/safepay.js for why), so
   // "cancel" is a decision recorded here rather than an object cancelled at Safepay:
   // the paid period runs to its end, nothing more is charged, and the sweep closes
   // the row once the days the restaurant paid for are over.

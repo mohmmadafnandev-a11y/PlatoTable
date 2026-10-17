@@ -1,42 +1,28 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { loadEnv } from 'vite'
 
-// Runs the Vercel-style handlers in `api/` under `vite dev`.
+// Runs the Vercel-style handlers under `vite dev`.
 //
 // Why this exists: the platform's server-only work (restaurant onboarding, the
-// Safepay checkout and webhook endpoints) lives in Vercel serverless
-// functions, and plain `vite dev` knows nothing about them. Without this, a
-// request to /api/... falls through to the SPA fallback and the endpoint returns
-// index.html, so the whole server half of the product can only be exercised by
-// deploying — which is exactly the loop we are trying to avoid.
+// Safepay checkout and webhook endpoints) lives in serverless functions, and
+// plain `vite dev` knows nothing about them. Without this, a request to /api/...
+// falls through to the SPA fallback and the endpoint returns index.html, so the
+// whole server half of the product can only be exercised by deploying — which is
+// exactly the loop we are trying to avoid.
+//
+// The handlers themselves live in `server/`; Vercel ships one catch-all function
+// (`api/[...path].js`) that dispatches to them, because the Hobby plan caps a
+// deployment at twelve functions and this platform has more endpoints than that.
+// Requests here go through that same router, so dev and production exercise
+// identical dispatch rather than two lookalike copies.
 //
 // This is dev-only (`apply: 'serve'`). Production still runs the real Vercel
-// functions; nothing here ships in the bundle.
+// function; nothing here ships in the bundle.
 //
 // Caveat worth knowing: `vercel dev` remains the authority on Vercel-specific
-// behaviour such as `vercel.json` rewrites and how api/ interacts with them.
-// This shim only guarantees the handler itself behaves.
-
-// Legacy secret location. The standalone Super Admin app still holds the only
-// copy of the server-only keys, and duplicating a service role key into a second
-// file to satisfy a dev server is not worth it — so this reads that file in
-// place instead. Delete this block once super_admin/ is retired.
-const LEGACY_ENV_DIR = 'super_admin/superadmin'
-
-function parseEnvFile(path) {
-  if (!existsSync(path)) return {}
-  return Object.fromEntries(readFileSync(path, 'utf8')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('#'))
-    .map((line) => {
-      const index = line.indexOf('=')
-      if (index < 1) return null
-      return [line.slice(0, index).trim(), line.slice(index + 1).trim().replace(/^["']|["']$/g, '')]
-    })
-    .filter(Boolean))
-}
+// behaviour such as `vercel.json` rewrites and how the function interacts with
+// them. This shim only guarantees the dispatch and the handler behave.
 
 function readBody(request) {
   return new Promise((resolve) => {
@@ -81,10 +67,10 @@ export default function devApiRoutes() {
     apply: 'serve',
     config(_config, environment) {
       const root = process.cwd()
-      const legacy = { ...parseEnvFile(resolve(root, LEGACY_ENV_DIR, '.env')), ...parseEnvFile(resolve(root, LEGACY_ENV_DIR, '.env.local')) }
-      // Root files win, so this does not silently shadow a newer value.
-      const merged = { ...legacy, ...loadEnv(environment.mode, root, '') }
-      for (const [key, value] of Object.entries(merged)) {
+      // The root `.env.local` is the single home of every value now (the legacy
+      // nested project's env files were consolidated into it).
+      const env = loadEnv(environment.mode, root, '')
+      for (const [key, value] of Object.entries(env)) {
         if (typeof value === 'string' && value) process.env[key] = value
       }
       const missing = ['VITE_SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'].filter((key) => !process.env[key])
@@ -96,8 +82,17 @@ export default function devApiRoutes() {
       server.middlewares.use(async (request, response, next) => {
         const url = new URL(request.url, 'http://localhost')
         if (!url.pathname.startsWith('/api/')) return next()
-        const file = resolve(process.cwd(), `.${url.pathname}.js`)
-        if (!existsSync(file)) return next()
+        // The handlers live in `server/` and production ships one catch-all
+        // function (Vercel's Hobby plan caps a deployment at twelve, and this
+        // platform has more endpoints than that). Requests here go through the
+        // very same router so dev and production exercise identical dispatch;
+        // the pre-check keeps unknown paths falling through to the SPA as before.
+        const segments = url.pathname.replace(/^\/api\/?/i, '').split('/').filter(Boolean)
+        const known = segments.length
+          && segments.every((segment) => /^[a-z0-9][a-z0-9-]*$/i.test(segment))
+          && existsSync(resolve(process.cwd(), 'server', ...segments) + '.js')
+        if (!known) return next()
+        const file = resolve(process.cwd(), 'api', '[...path].js')
         try {
           const module = await server.ssrLoadModule(file)
           if (typeof module.default !== 'function') {
