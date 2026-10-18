@@ -20,6 +20,7 @@
     }
   ],
   "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/router?route=:path*" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

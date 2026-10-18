@@ -11,11 +11,13 @@ import { loadEnv } from 'vite'
 // whole server half of the product can only be exercised by deploying — which is
 // exactly the loop we are trying to avoid.
 //
-// The handlers themselves live in `server/`; Vercel ships one catch-all function
-// (`api/[...path].js`) that dispatches to them, because the Hobby plan caps a
+// The handlers themselves live in `server/`; Vercel ships one router function
+// (`api/router.js`) that dispatches to them, because the Hobby plan caps a
 // deployment at twelve functions and this platform has more endpoints than that.
-// Requests here go through that same router, so dev and production exercise
-// identical dispatch rather than two lookalike copies.
+// Production reaches the router through a `vercel.json` rewrite
+// (`/api/:path*` -> `/api/router?route=:path*`) since this project type does not
+// support a bracket catch-all in `api/`; requests here are accepted in both
+// shapes, so the local server exercises the same dispatch as production.
 //
 // This is dev-only (`apply: 'serve'`). Production still runs the real Vercel
 // function; nothing here ships in the bundle.
@@ -82,17 +84,18 @@ export default function devApiRoutes() {
       server.middlewares.use(async (request, response, next) => {
         const url = new URL(request.url, 'http://localhost')
         if (!url.pathname.startsWith('/api/')) return next()
-        // The handlers live in `server/` and production ships one catch-all
-        // function (Vercel's Hobby plan caps a deployment at twelve, and this
-        // platform has more endpoints than that). Requests here go through the
-        // very same router so dev and production exercise identical dispatch;
-        // the pre-check keeps unknown paths falling through to the SPA as before.
-        const segments = url.pathname.replace(/^\/api\/?/i, '').split('/').filter(Boolean)
+        // The handlers live in `server/` and production reaches them through the
+        // router (see the file header). A request is accepted in either shape —
+        // the real URL, or the rewritten `/api/router?route=…` the deployment
+        // produces — so both are exercised here. The pre-check keeps unknown
+        // paths falling through to the SPA as before.
+        const rewritten = url.pathname === '/api/router' ? (url.searchParams.get('route') || '') : null
+        const segments = (rewritten === null ? url.pathname.replace(/^\/api\/?/i, '') : rewritten).split('/').filter(Boolean)
         const known = segments.length
           && segments.every((segment) => /^[a-z0-9][a-z0-9-]*$/i.test(segment))
           && existsSync(resolve(process.cwd(), 'server', ...segments) + '.js')
         if (!known) return next()
-        const file = resolve(process.cwd(), 'api', '[...path].js')
+        const file = resolve(process.cwd(), 'api', 'router.js')
         try {
           const module = await server.ssrLoadModule(file)
           if (typeof module.default !== 'function') {

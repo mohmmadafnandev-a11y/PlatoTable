@@ -3,9 +3,17 @@
 // Why a single file: Vercel's Hobby plan allows at most twelve serverless
 // functions per deployment and this platform has more endpoints than that — the
 // build simply refuses once the limit is passed. The handlers live in `server/`
-// (outside the deployment's function scan) and this catch-all is the only
-// function Vercel creates for the API; every public URL is unchanged
+// (outside the deployment's function scan) and this router is the only function
+// Vercel creates for the API; every public URL is unchanged
 // (`/api/safepay/checkout` and friends all land here and are dispatched below).
+//
+// Why a rewrite and not `api/[...path].js`: measured on the deployed site, this
+// project type does NOT treat the bracket form as a catch-all — a one-segment
+// URL like /api/safepay reached the handler, while /api/safepay/status was
+// answered by Vercel's own NOT_FOUND page, and the literal bracket path behaved
+// like a normal file. Multi-segment API routes only exist if `vercel.json`
+// rewrites them here (`/api/:path*` -> `/api/router?route=:path*`), which every
+// plan supports.
 //
 // The route table is written out by hand rather than derived from the filesystem:
 // a bundler can only follow imports it can see statically, and a computed path
@@ -47,18 +55,26 @@ const readBody = (request) => new Promise((resolve) => {
   request.on('error', () => resolve(Buffer.alloc(0)))
 })
 
-export default async function handler(request, response) {
-  // The route key comes from the URL itself (`/api/safepay/checkout` ->
-  // `safepay/checkout`), so Vercel and the local dev shim resolve identically.
-  // Only plain path segments are accepted — that is what keeps `..` and extension
-  // tricks out of the lookup — and anything else is a 404.
-  const pathname = String(request.url || '').split('?')[0]
-  const segments = pathname.replace(/^\/api\/?/i, '').split('/').filter(Boolean)
-  if (!segments.length || segments.some((segment) => !/^[a-z0-9][a-z0-9-]*$/i.test(segment))) {
-    return response.status(404).json({ error: 'Not found.' })
-  }
+/**
+ * The requested route, e.g. `safepay/checkout`.
+ *
+ * The rewrite hands the segments over as `?route=safepay/checkout`; the local dev
+ * shim and any direct call present the URL itself, so both are read and only
+ * plain path segments are accepted — that is what keeps `..` and extension
+ * tricks out of the route lookup. An unknown route is a 404.
+ */
+function routeFrom(request) {
+  const viaQuery = request?.query?.route
+  const raw = Array.isArray(viaQuery) ? viaQuery.join('/') : typeof viaQuery === 'string' ? viaQuery : ''
+  const fromUrl = String(request?.url || '').split('?')[0].replace(/^\/api\/?/i, '')
+  const segments = (raw || fromUrl).split('/').filter(Boolean)
+  if (!segments.length || segments.some((segment) => !/^[a-z0-9][a-z0-9-]*$/i.test(segment))) return null
+  return segments.join('/').replace(/\.js$/i, '')
+}
 
-  const load = routes[segments.join('/').replace(/\.js$/i, '')]
+export default async function handler(request, response) {
+  const route = routeFrom(request)
+  const load = route ? routes[route] : null
   if (!load) return response.status(404).json({ error: 'Not found.' })
 
   // Parse the body ourselves unless the runtime already did (see the note above).
@@ -75,7 +91,7 @@ export default async function handler(request, response) {
 
   const module = await load()
   if (typeof module.default !== 'function') {
-    return response.status(500).json({ error: `${pathname} has no default export` })
+    return response.status(500).json({ error: `/api/${route} has no default export` })
   }
   return module.default(request, response)
 }

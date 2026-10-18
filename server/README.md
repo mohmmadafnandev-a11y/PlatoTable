@@ -2,9 +2,12 @@
 
 These handlers run server-side on Vercel. They live in this folder rather than
 under `api/` because the Hobby plan caps a deployment at twelve serverless
-functions: `api/[...path].js` is the deployment's single function and dispatches
-every `/api/…` request to the handler here (the dev shim routes through the same
-file, so dev and production share the dispatch).
+functions: `api/router.js` is the deployment's single function, and a
+`vercel.json` rewrite (`/api/:path*` → `/api/router?route=:path*`) dispatches
+every `/api/…` request to the handler here. The dev shim routes through the same
+function, so dev and production share the dispatch — a bracket catch-all under
+`api/` was measured NOT to work for this project type (multi-segment URLs 404 at
+the edge).
 
 Configure the following **server-only** Vercel environment variables before deploying:
 
