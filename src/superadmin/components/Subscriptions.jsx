@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { CalendarClock, CreditCard, ExternalLink, Play, Pause, Receipt, RefreshCw, XCircle } from 'lucide-react'
 import { CURRENCY, intervalLabel, planDurationDays, resolvePlanPrice } from '../../../shared/plans.js'
 import { supabase } from '../lib/supabase'
 import { logActivity } from '../lib/data'
-import { cancelSubscription, removePaymentMethod, runBillingSweep, savePaymentMethod, setAutoRenew, startSubscription, syncSubscription } from '../lib/billing-api'
+import { cancelSubscription, removePaymentMethod, runBillingSweep, savePaymentMethod, setAutoRenew, settlePayment, startSubscription, syncSubscription } from '../lib/billing-api'
 import { STATUSES, dateTime, daysBetween, money, plainNumber, shortDate } from '../lib/format'
 import SubscriptionProgress from './SubscriptionProgress'
 import { Card, EmptyState, Notice, SectionHead, Spinner, StatusBadge, inputClass } from './ui'
@@ -196,17 +197,73 @@ export function UpcomingPayments() {
 export function Subscriptions({ navigate }) {
   const { subscriptions, loading, error, load } = useSubscriptionData()
   const [filter, setFilter] = useState('all')
+  // What the return from Safepay has to say: `settling` shows the confirming
+  // sheet, and the notice afterwards reports what actually happened. Returning
+  // from Safepay is a full page load, so the initial state may read the URL
+  // directly: cancelled needs no request, and success starts the sheet before
+  // the effect below fires.
+  const [checkoutReturn, setCheckoutReturn] = useState(() => {
+    const outcome = new URLSearchParams(window.location.search).get('checkout')
+    if (outcome === 'canceled') return { settling: false, tone: 'warning', text: 'Checkout cancelled — nothing was charged.' }
+    if (outcome === 'success') return { settling: true, tone: 'success', text: '' }
+    return null
+  })
+  const location = useLocation()
+
+  // Coming back from Safepay: the URL names the restaurant and the payment
+  // session. Reading that session back is what takes the period's money (the
+  // platform charges it itself — see server/safepay/checkout.js), so it runs
+  // before anything on this screen is trusted, behind a confirming sheet rather
+  // than letting the row's stale "past due" face show underneath.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const outcome = params.get('checkout')
+    if (!outcome) return undefined
+    const clear = () => navigate('/subscriptions', { replace: true })
+    if (outcome !== 'success') { clear(); return undefined }
+    let cancelled = false
+    settlePayment(params.get('restaurant'), params.get('tracker'))
+      .then((result) => {
+        if (cancelled) return
+        const card = result.subscription?.card_last4 ? ` Card ${result.subscription.card_brand || ''} ···${result.subscription.card_last4} is on file.` : ''
+        if (result.result === 'paid') setCheckoutReturn({ settling: false, tone: 'success', text: `Payment received — the subscription is active until ${shortDate(result.subscription?.current_period_end)}.${card}` })
+        else if (result.result === 'card-saved' && result.first_charge?.charged === false) setCheckoutReturn({ settling: false, tone: 'danger', text: `Card saved, but the payment could not be taken${result.first_charge.reason ? `: ${result.first_charge.reason}` : '.'} Try again or use another card.` })
+        else if (result.result === 'card-saved' && result.subscription?.status === 'active' && result.subscription?.last_payment_status === 'paid') setCheckoutReturn({ settling: false, tone: 'success', text: `Payment received — the subscription is active until ${shortDate(result.subscription?.current_period_end)}.${card}` })
+        else if (result.result === 'card-saved') setCheckoutReturn({ settling: false, tone: 'success', text: `Card saved.${card} Renewals will charge it automatically.` })
+        else if (result.result === 'pending') setCheckoutReturn({ settling: false, tone: 'warning', text: 'Safepay is still finishing the payment — read the status back in a moment.' })
+        else if (result.result === 'unsettled') setCheckoutReturn({ settling: false, tone: 'warning', text: 'The attempt ended without a settled charge — nothing was taken.' })
+        else setCheckoutReturn({ settling: false, tone: 'warning', text: 'Returned from Safepay — read the status back to see the outcome.' })
+        load()
+      })
+      .catch((settleError) => { if (!cancelled) setCheckoutReturn({ settling: false, tone: 'danger', text: settleError.message }) })
+      .then(() => { if (!cancelled) clear() })
+    return () => { cancelled = true }
+  }, [location.search, navigate, load])
 
   const counts = STATUSES.map((status) => [status, subscriptions.filter((item) => item.status === status).length])
   const visible = subscriptions.filter((item) => filter === 'all' || item.status === filter)
 
   return (
     <>
+      {checkoutReturn?.settling && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/45 p-4 backdrop-blur-sm">
+          <div className="grid w-[min(420px,92vw)] justify-items-center gap-3 rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-2xl">
+            <span className="h-9 w-9 animate-spin rounded-full border-[3px] border-slate-200 border-t-indigo-600" aria-hidden="true" />
+            <strong className="text-lg font-semibold text-slate-900">Confirming the payment</strong>
+            <p className="text-sm leading-6 text-slate-500">Reading the result back from Safepay and starting the period. This usually takes a few seconds — keep this page open.</p>
+          </div>
+        </div>
+      )}
+
       <SectionHead
         eyebrow="BILLING CONTROL"
         title="Subscriptions"
         description="Trials, billing cycles, and the health of every subscription."
       />
+
+      {checkoutReturn && !checkoutReturn.settling && (
+        <div className="mb-5"><Notice tone={checkoutReturn.tone}>{checkoutReturn.text}</Notice></div>
+      )}
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {counts.map(([status, count]) => (

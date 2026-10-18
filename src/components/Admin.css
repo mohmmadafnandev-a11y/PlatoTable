@@ -124,3 +124,14 @@
 .login-link{padding:2px 0;border:0;background:transparent;color:#9f3527;font-size:10px;font-weight:700}
 .login-link:disabled{opacity:.5}
 .login-link:hover:not(:disabled){text-decoration:underline}
+
+/* The "confirming your payment" sheet shown while the return from Safepay is
+   settled (read the tracker back, store the card, charge the first period). It
+   reuses the modal chrome so it is themed like every other dialog, and it
+   deliberately covers the page: the row underneath still says "past due" until
+   the charge has actually been written down, and flashing that stale state at
+   someone who just paid is worse than a second of waiting. */
+.billing-settle-modal{width:min(430px,100%)}
+.billing-settle-body{display:grid;justify-items:center;gap:13px;padding:30px 24px 34px;text-align:center}
+.billing-settle-body strong{font:700 20px 'Playfair Display',serif}
+.billing-settle-body p{margin:0;max-width:320px;font-size:12.5px;line-height:1.65;opacity:.72}
