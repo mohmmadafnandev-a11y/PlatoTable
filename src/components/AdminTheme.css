@@ -40,7 +40,8 @@
 
 [data-theme='dark'] .admin-topbar { border-bottom-color: var(--ad-border); background: rgba(28, 23, 19, .92); }
 [data-theme='dark'] .topbar-page { color: var(--ad-muted); }
-[data-theme='dark'] .admin-topbar > a { color: var(--ad-accent); }
+[data-theme='dark'] .topbar-menu-link { border-color: var(--ad-border); background: var(--ad-surface); color: var(--ad-text); }
+[data-theme='dark'] .topbar-menu-link:hover { border-color: #4d4239; color: var(--ad-text); }
 [data-theme='dark'] .admin-kicker { color: var(--ad-accent); }
 [data-theme='dark'] .admin-secondary { border-color: var(--ad-border); background: var(--ad-raised); color: var(--ad-text); }
 [data-theme='dark'] .danger-button { border-color: #543129; background: #34211d; color: #f0a193; }
