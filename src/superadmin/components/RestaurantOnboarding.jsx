@@ -18,6 +18,9 @@ const initialForm = {
   // exists rather than treating 0 days as "no trial".
   trialOn: true,
   trialDays: '7',
+  // Free days after the trial or the paid period ends, before the menu goes
+  // offline — the yellow phase on the billing bar. Editable later per restaurant.
+  backupDays: '0',
   customDomain: '',
   notes: '',
 }
@@ -101,10 +104,20 @@ export default function RestaurantOnboarding({ navigate }) {
     ? `The ${selectedPlan.name} plan has no ${CURRENCY} price yet. Add one in Plans & pricing, or onboard with no plan.`
     : ''
 
+  // Free days after the trial or paid period ends. Validated here as well as on
+  // the server, so a typo is a form message rather than a failed onboarding.
+  const backupProblem = (() => {
+    const value = String(form.backupDays ?? '').trim()
+    if (!value) return ''
+    const days = Number(value)
+    if (!Number.isInteger(days) || days < 0 || days > 365) return 'Backup days must be a whole number between 0 and 365.'
+    return ''
+  })()
+
   const canSubmit = useMemo(() => Boolean(
     form.name.trim() && subdomain && !slugProblem && form.ownerName.trim() && form.ownerEmail.trim()
-    && form.ownerPassword && !passwordProblem && !pricingProblem && !customProblem && !saving
-  ), [form, subdomain, slugProblem, passwordProblem, pricingProblem, customProblem, saving])
+    && form.ownerPassword && !passwordProblem && !pricingProblem && !customProblem && !backupProblem && !saving
+  ), [form, subdomain, slugProblem, passwordProblem, pricingProblem, customProblem, backupProblem, saving])
 
   const submit = async (event) => {
     event.preventDefault()
@@ -114,6 +127,7 @@ export default function RestaurantOnboarding({ navigate }) {
     if (passwordProblem) return setFeedback(passwordProblem)
     if (pricingProblem) return setFeedback(pricingProblem)
     if (customProblem) return setFeedback(customProblem)
+    if (backupProblem) return setFeedback(backupProblem)
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) { setSaving(false); return setFeedback('Your session expired. Please sign in again.') }
@@ -124,6 +138,7 @@ export default function RestaurantOnboarding({ navigate }) {
       customDomain: form.customDomain.trim().toLowerCase(),
       planId: planMode === 'catalogue' ? (form.planId || null) : null,
       trialDays,
+      backupDays: Number(form.backupDays) || 0,
       // Sent instead of a catalogue plan id. The server creates the plan in
       // Safepay and hands its id to the onboarding transaction, so a restaurant
       // can be billed for it immediately. The trial is the same decision
@@ -290,6 +305,25 @@ export default function RestaurantOnboarding({ navigate }) {
               <small className="font-normal text-slate-500">Counted from the moment this restaurant is created.</small>
             </label>
           )}
+        </div>
+
+        {/* Backup days: the free window after the trial or the paid period ends,
+            drawn as the yellow phase on both billing bars. Asked here once, and
+            editable later from the restaurant or its subscription. */}
+        <div className="rounded-xl border border-slate-200 p-4 sm:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-800">Backup days</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Free days after the trial or the paid period ends, before the menu goes offline.
+                0 keeps the platform-wide grace period. Editable any time.
+              </p>
+            </div>
+            <label className="grid w-40 gap-2 text-sm font-medium text-slate-700">Days
+              <input type="number" min="0" max="365" value={form.backupDays} onChange={set('backupDays')} className={inputClass} />
+              {backupProblem && <small className="font-normal text-red-600">{backupProblem}</small>}
+            </label>
+          </div>
         </div>
       </fieldset>
 

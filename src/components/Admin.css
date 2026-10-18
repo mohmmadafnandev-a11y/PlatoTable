@@ -135,3 +135,26 @@
 .billing-settle-body{display:grid;justify-items:center;gap:13px;padding:30px 24px 34px;text-align:center}
 .billing-settle-body strong{font:700 20px 'Playfair Display',serif}
 .billing-settle-body p{margin:0;max-width:320px;font-size:12.5px;line-height:1.65;opacity:.72}
+
+/* Three-phase billing bar: white = free trial, green = paid period, yellow =
+   backup days. The state classes (past / current / next) decide solid, filled
+   and hatched; the phase class decides the colour. Appended last so it wins
+   over the single-phase rules above. */
+.timeline-segment.is-trial{background:repeating-linear-gradient(45deg,#f2f5f9,#f2f5f9 7px,#e9eef4 7px,#e9eef4 14px)}
+.timeline-segment.is-trial.is-past{background:#f7f9fc}
+.timeline-segment.is-trial .timeline-fill{background:#fff;box-shadow:inset 0 0 0 1px #d8e0e9}
+.timeline-segment.is-plan{background:repeating-linear-gradient(45deg,#eef9f1,#eef9f1 7px,#e1f3e7 7px,#e1f3e7 14px)}
+.timeline-segment.is-plan.is-past{background:#ddf2e4}
+.timeline-segment.is-plan .timeline-fill{background:linear-gradient(90deg,#63bc82,#2e8b57)}
+.timeline-segment.is-backup{background:repeating-linear-gradient(45deg,#fff8e1,#fff8e1 7px,#fdf0c9 7px,#fdf0c9 14px)}
+.timeline-segment.is-backup.is-past{background:#fbeeb8}
+.timeline-segment.is-backup .timeline-fill{background:linear-gradient(90deg,#f2c94c,#d99e18)}
+.timeline-labels.phase-legend{display:flex;flex-wrap:wrap;gap:6px 16px}
+.timeline-labels.phase-legend span::before{background:#94a3b8}
+.timeline-labels.phase-legend span.legend-trial::before{background:#fff;border:1px solid #cbd5e1}
+.timeline-labels.phase-legend span.legend-plan::before{background:#2e8b57}
+.timeline-labels.phase-legend span.legend-backup::before{background:#e0ad18}
+.timeline-labels.phase-legend span:last-child::before{border:0;background:#94a3b8}
+.timeline-labels.phase-legend span.legend-trial:last-child::before{background:#fff;border:1px solid #cbd5e1}
+.timeline-labels.phase-legend span.legend-plan:last-child::before{background:#2e8b57;border:0}
+.timeline-labels.phase-legend span.legend-backup:last-child::before{background:#e0ad18;border:0}

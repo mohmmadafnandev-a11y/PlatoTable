@@ -1,23 +1,33 @@
 import { Card } from './ui'
 import { shortDate } from '../lib/format'
+import { billingPhases, PHASE_META } from '../../../shared/periods.js'
 import { progressView } from '../lib/subscription-progress'
 
 // Where a subscription is in its life, drawn as a bar.
 //
-// The panel used to answer this with a status badge and two dates, which is
-// three separate facts an operator has to assemble in their head — and the one
-// question they actually have ("how long until money moves, and how much") was
-// the one nothing answered. This is that answer: one bar for the current period,
-// with the elapsed part solid and the remaining part striped, and the amount and
-// date of the next charge stated plainly.
+// Three phases, three colours — the same language the restaurant panel uses:
 //
-// The states the bar can describe are in ../lib/subscription-progress.js.
+//   white   the free trial
+//   green   the paid period
+//   yellow  backup days (the free window after a period ends unpaid)
+//
+// A phase behind us is solid, the live one is filled up to today, and the ones
+// ahead are hatched. The text beside the bar still comes from
+// ../lib/subscription-progress.js; the bar itself comes from ../../../shared/
+// periods.js, which the restaurant panel reads too, so the two panels cannot
+// draw the same subscription differently.
 
 const TONES = {
-  indigo: { headline: 'text-slate-900', pay: 'text-indigo-700', bar: '#4f46e5', stripe: 'rgba(79,70,229,.22)', stripeBase: '#eef2ff', track: 'border-slate-200' },
-  warning: { headline: 'text-amber-900', pay: 'text-amber-700', bar: '#d97706', stripe: 'rgba(217,119,6,.22)', stripeBase: '#fffbeb', track: 'border-amber-200' },
-  danger: { headline: 'text-red-800', pay: 'text-red-700', bar: '#dc2626', stripe: 'rgba(220,38,38,.2)', stripeBase: '#fef2f2', track: 'border-red-200' },
-  slate: { headline: 'text-slate-900', pay: 'text-slate-700', bar: '#64748b', stripe: 'rgba(100,116,139,.2)', stripeBase: '#f8fafc', track: 'border-slate-200' },
+  indigo: { headline: 'text-slate-900', pay: 'text-indigo-700' },
+  warning: { headline: 'text-amber-900', pay: 'text-amber-700' },
+  danger: { headline: 'text-red-800', pay: 'text-red-700' },
+  slate: { headline: 'text-slate-900', pay: 'text-slate-700' },
+}
+
+const PHASE_STYLE = {
+  trial: { chip: 'border border-slate-300 bg-white', fill: '#ffffff', fillEdge: 'inset 0 0 0 1px #d6dde6', stripe: 'rgba(100,116,139,.28)', base: '#f1f5f9' },
+  plan: { chip: 'bg-emerald-500', fill: '#2e8b57', fillEdge: 'none', stripe: 'rgba(46,139,87,.24)', base: '#f0fdf4' },
+  backup: { chip: 'bg-amber-400', fill: '#e0ad18', fillEdge: 'none', stripe: 'rgba(224,173,24,.3)', base: '#fefce8' },
 }
 
 /**
@@ -28,8 +38,9 @@ export default function SubscriptionProgress({ subscription, className = '' }) {
   if (!subscription) return null
   const view = progressView(subscription)
   const tone = TONES[view.tone] || TONES.indigo
-  const elapsed = view.ratio === null ? 0 : Math.round(view.ratio * 100)
-  const finalLabel = view.payLabel === 'NO FURTHER PAYMENT'
+  const { phases, current } = billingPhases(subscription)
+  const first = phases[0]
+  const last = phases[phases.length - 1]
 
   return (
     <Card className={`p-6 ${className}`}>
@@ -46,45 +57,59 @@ export default function SubscriptionProgress({ subscription, className = '' }) {
         )}
       </div>
 
-      {view.ratio !== null && (
+      {phases.length > 0 && (
         <>
           <div className="mt-5 flex flex-wrap items-center gap-x-6 gap-y-2">
-            {view.legend.map((item) => (
-              <span key={item.label} className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
-                {item.kind === 'solid'
-                  ? <span className="h-2.5 w-2.5 rounded-[3px]" style={{ background: tone.bar }} />
-                  : <span className="h-2.5 w-2.5 rounded-[3px] border border-dashed border-slate-400" />}
-                {item.label}
+            {phases.map((phase) => (
+              <span key={phase.kind} className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
+                <span className={`h-2.5 w-2.5 rounded-[3px] ${PHASE_STYLE[phase.kind].chip}`} />
+                {PHASE_META[phase.kind].label}{phase.state === 'current' ? ' · now' : ''}
               </span>
             ))}
           </div>
 
-          {/* One bar, two segments. The elapsed part is solid and the remainder
-              is striped, so "how much of this period is spent" reads at a glance
-              without a number printed on the bar itself. */}
-          <div className={`mt-3 flex h-12 w-full overflow-hidden rounded-lg border ${tone.track}`} role="img" aria-label={`${elapsed}% of this period elapsed`}>
-            {/* min-width keeps the elapsed segment visible on a period that has
-                only just begun. Without it a fresh trial draws an empty bar with
-                a legend beside it naming two colours, one of which is not on
-                screen. The width itself is still the real proportion. */}
-            <div className="h-full min-w-[6px]" style={{ width: `${elapsed}%`, background: tone.bar }} />
-            <div
-              className="h-full flex-1"
-              style={{
-                backgroundImage: `repeating-linear-gradient(45deg, ${tone.stripe} 0 8px, transparent 8px 16px)`,
-                backgroundColor: tone.stripeBase,
-              }}
-            />
+          {/* One bar, one segment per phase. Behind is solid, the live phase is
+              filled up to today, ahead is striped — so "where is this restaurant
+              and what comes next" reads without doing arithmetic. */}
+          <div className="mt-3 flex h-12 w-full overflow-hidden rounded-lg border border-slate-200" role="img" aria-label="Free trial, paid period and backup days">
+            {phases.map((phase) => {
+              const style = PHASE_STYLE[phase.kind]
+              const ratio = phase.state === 'past' ? 1 : phase.state === 'current' ? (current?.ratio ?? 0) : 0
+              return (
+                <div
+                  key={phase.kind}
+                  className="relative h-full"
+                  style={{
+                    flexGrow: Math.max(phase.days, 0.6),
+                    borderLeft: '2px solid #fff',
+                    backgroundColor: style.base,
+                    backgroundImage: phase.state === 'past'
+                      ? 'none'
+                      : `repeating-linear-gradient(45deg, ${style.stripe} 0 8px, transparent 8px 16px)`,
+                  }}
+                >
+                  <div
+                    className="absolute inset-y-0 left-0 min-w-[4px]"
+                    style={{ width: `${Math.round(ratio * 100)}%`, background: style.fill, boxShadow: style.fillEdge === 'none' ? undefined : style.fillEdge }}
+                  />
+                </div>
+              )
+            })}
           </div>
 
           <div className="mt-3 flex flex-wrap justify-between gap-4 text-sm">
             <div>
-              <strong className="block font-semibold text-slate-900">{shortDate(subscription.trial_start || subscription.current_period_start)}</strong>
-              <small className="text-slate-500">{subscription.trial_start ? 'Trial started' : 'Period started'}</small>
+              <strong className="block font-semibold text-slate-900">{shortDate(new Date(first.start).toISOString())}</strong>
+              <small className="text-slate-500">{PHASE_META[first.kind].label} started</small>
             </div>
             <div className="text-right">
-              <strong className="block font-semibold text-slate-900">{finalLabel ? '—' : shortDate(subscription.trial_end || subscription.current_period_end)}</strong>
-              <small className="text-slate-500">{finalLabel ? 'No further payment' : subscription.trial_end ? 'First payment' : 'Renews'}</small>
+              <strong className="block font-semibold text-slate-900">{last ? shortDate(new Date((current?.end ?? last.end)).toISOString()) : '—'}</strong>
+              <small className="text-slate-500">
+                {!current ? 'Coverage ended'
+                  : current.kind === 'trial' ? 'First payment'
+                    : current.kind === 'backup' ? 'Menu goes offline'
+                      : 'Next payment'}
+              </small>
             </div>
           </div>
         </>

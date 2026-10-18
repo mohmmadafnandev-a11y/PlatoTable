@@ -4,8 +4,10 @@ import { CalendarClock, CreditCard, ExternalLink, Play, Pause, Receipt, RefreshC
 import { CURRENCY, intervalLabel, planDurationDays, resolvePlanPrice } from '../../../shared/plans.js'
 import { supabase } from '../lib/supabase'
 import { logActivity } from '../lib/data'
+import { billingPhases } from '../../../shared/periods.js'
 import { cancelSubscription, removePaymentMethod, runBillingSweep, savePaymentMethod, setAutoRenew, settlePayment, startSubscription, syncSubscription } from '../lib/billing-api'
 import { STATUSES, dateTime, daysBetween, money, plainNumber, shortDate } from '../lib/format'
+import BackupDaysEditor from './BackupDaysEditor'
 import SubscriptionProgress from './SubscriptionProgress'
 import { Card, EmptyState, Notice, SectionHead, Spinner, StatusBadge, inputClass } from './ui'
 
@@ -382,7 +384,7 @@ export function SubscriptionDetail({ navigate, id, profile }) {
   const endField = subscription.status === 'trialing' ? 'trial_end' : 'current_period_end'
   const currentEnd = subscription[endField]
 
-  const write = async (patch, action, details = {}) => {
+  const write = async (patch, action, details = {}, message = '') => {
     setSaving(action)
     const { error } = await supabase
       .from('subscriptions')
@@ -391,14 +393,47 @@ export function SubscriptionDetail({ navigate, id, profile }) {
     setSaving('')
     if (error) return setFeedback({ tone: 'danger', text: error.message })
     await logActivity({ superAdminId: profile?.id, restaurantId, action, details })
-    setFeedback({ tone: 'success', text: `${action.replace(/_/g, ' ')} recorded.` })
+    setFeedback({ tone: 'success', text: message || `${action.replace(/_/g, ' ')} recorded.` })
     load()
   }
 
-  const extend = () => {
-    const base = new Date(currentEnd || subscription.created_at)
-    base.setDate(base.getDate() + Number(days))
-    return write({ [endField]: base.toISOString() }, 'subscription_extended', { days: Number(days), field: endField })
+  // Which phase is running, from the same helper both bars draw with: trial,
+  // paid period, or the backup window. The adjust buttons below act on this, so
+  // "deduct 5 days" can never quietly edit a phase that has already ended.
+  const phaseView = billingPhases(subscription)
+  const phaseLabel = phaseView.current
+    ? ({ trial: 'the free trial', plan: 'the paid period', backup: 'the backup window' })[phaseView.current.kind]
+    : ''
+
+  // Adds or deducts days on the live phase — a goodwill credit, not a payment.
+  // The sweep and the billing bars follow the adjusted date immediately.
+  const adjustDays = async (direction) => {
+    const amount = Number(days)
+    if (!Number.isInteger(amount) || amount < 1 || amount > 365) {
+      return setFeedback({ tone: 'warning', text: 'Enter a whole number of days between 1 and 365.' })
+    }
+    const delta = direction === 'deduct' ? -amount : amount
+    const phase = phaseView.current
+    let patch
+    let label
+    if (phase?.kind === 'trial') {
+      patch = { trial_end: new Date(new Date(subscription.trial_end).getTime() + delta * 86400000).toISOString() }
+      label = 'trial'
+    } else if (phase?.kind === 'plan') {
+      patch = { current_period_end: new Date(new Date(subscription.current_period_end).getTime() + delta * 86400000).toISOString() }
+      label = 'paid period'
+    } else if (phase?.kind === 'backup') {
+      patch = { backup_days: Math.max(0, Number(subscription.backup_days || 0) + delta) }
+      label = 'backup window'
+    } else {
+      return setFeedback({ tone: 'warning', text: 'Nothing is running to adjust. Start a subscription, or set backup days below.' })
+    }
+    return write(
+      patch,
+      'subscription_days_adjusted',
+      { days: delta, phase: label, from: phase.start ? new Date(phase.start).toISOString() : null, to: label === 'backup window' ? patch.backup_days : new Date(Object.values(patch)[0]).toISOString() },
+      `${direction === 'deduct' ? 'Deducted' : 'Added'} ${amount} day${amount === 1 ? '' : 's'} on the ${label}.`,
+    )
   }
 
   const changePlan = async (planId) => {
@@ -719,21 +754,22 @@ export function SubscriptionDetail({ navigate, id, profile }) {
 
         <div className="mt-6 grid gap-6 lg:grid-cols-3">
           <div className="rounded-xl border border-slate-200 p-4">
-            <h3 className="text-sm font-semibold text-slate-800">Extend the billing period</h3>
-            {/* Two different things are easily confused, and the difference
-                decides whether a restaurant keeps serving menus. Saying so here
-                is cheaper than explaining it on a support call. */}
+            <h3 className="text-sm font-semibold text-slate-800">Adjust the current phase</h3>
             <p className="mt-1 text-xs text-slate-500">
-              Pushes the next charge date out by these days — a goodwill credit, not a payment.
-              {' '}Separately, the platform's grace period already keeps a restaurant online automatically
-              after its date passes, before anything suspends it.
+              Adds or deducts days on whichever phase is running
+              {phaseLabel ? <> — <strong className="font-semibold text-slate-700">{phaseLabel}</strong></> : null}.
+              A goodwill credit, not a payment: the billing sweep and the phase bar follow the new date immediately.
             </p>
-            <div className="mt-3 flex gap-2">
+            <div className="mt-3 flex flex-wrap gap-2">
               <input type="number" min="1" max="365" value={days} onChange={(event) => setDays(event.target.value)} className={`${inputClass} w-24`} />
-              <button disabled={saving === 'subscription_extended'} onClick={extend} className="flex-1 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 disabled:opacity-60">
-                {saving === 'subscription_extended' ? 'Saving…' : 'Extend'}
+              <button disabled={saving === 'subscription_days_adjusted'} onClick={() => adjustDays('add')} className="flex-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-emerald-700 disabled:opacity-60">
+                {saving === 'subscription_days_adjusted' ? 'Saving…' : '+ Add days'}
+              </button>
+              <button disabled={saving === 'subscription_days_adjusted'} onClick={() => adjustDays('deduct')} className="flex-1 rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-700 disabled:opacity-60">
+                {saving === 'subscription_days_adjusted' ? 'Saving…' : '− Deduct days'}
               </button>
             </div>
+            <p className="mt-2 text-xs text-slate-400">Trial days while trialing · paid-period days while subscribed · backup days once the period has ended.</p>
           </div>
 
           <div className="rounded-xl border border-slate-200 p-4">
@@ -767,6 +803,15 @@ export function SubscriptionDetail({ navigate, id, profile }) {
               {saving === 'mark_paid' ? 'Recording…' : 'Mark as paid'}
             </button>
           </div>
+        </div>
+
+        <div className="mt-6">
+          <BackupDaysEditor
+            restaurantId={restaurantId}
+            restaurantName={subscription.restaurants?.name}
+            profile={profile}
+            onSaved={load}
+          />
         </div>
 
         <div className="mt-6 flex flex-wrap gap-3 border-t border-slate-100 pt-5">

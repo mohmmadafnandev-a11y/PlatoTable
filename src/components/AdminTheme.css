@@ -391,3 +391,22 @@
 [data-theme='dark'] .login-form input:disabled { background: #1e1915; }
 [data-theme='dark'] .login-form > small { color: var(--ad-muted); }
 [data-theme='dark'] .mobile-admin-brand strong { color: var(--ad-text); }
+
+/* Three-phase billing bar in the dark theme: same language, dark surfaces. */
+[data-theme='dark'] .timeline-segment.is-trial { background: repeating-linear-gradient(45deg, #2b3242, #2b3242 7px, #333c4e 7px, #333c4e 14px); }
+[data-theme='dark'] .timeline-segment.is-trial.is-past { background: #3a4457; }
+[data-theme='dark'] .timeline-segment.is-trial .timeline-fill { background: #e7e5e4; box-shadow: none; }
+[data-theme='dark'] .timeline-segment.is-plan { background: repeating-linear-gradient(45deg, #1f2e26, #1f2e26 7px, #27402f 7px, #27402f 14px); }
+[data-theme='dark'] .timeline-segment.is-plan.is-past { background: #2c4a36; }
+[data-theme='dark'] .timeline-segment.is-plan .timeline-fill { background: linear-gradient(90deg, #5da875, #3f8b5b); }
+[data-theme='dark'] .timeline-segment.is-backup { background: repeating-linear-gradient(45deg, #3a3421, #3a3421 7px, #4a422a 7px, #4a422a 14px); }
+[data-theme='dark'] .timeline-segment.is-backup.is-past { background: #514526; }
+[data-theme='dark'] .timeline-segment.is-backup .timeline-fill { background: linear-gradient(90deg, #e6c352, #c79a1e); }
+[data-theme='dark'] .timeline-labels.phase-legend span::before { background: #5b6473; }
+[data-theme='dark'] .timeline-labels.phase-legend span.legend-trial::before { background: #e7e5e4; border: 1px solid #4a5261; }
+[data-theme='dark'] .timeline-labels.phase-legend span.legend-plan::before { background: #3f8b5b; }
+[data-theme='dark'] .timeline-labels.phase-legend span.legend-backup::before { background: #c79a1e; }
+[data-theme='dark'] .timeline-labels.phase-legend span:last-child::before { border-color: transparent; background: #5b6473; }
+[data-theme='dark'] .timeline-labels.phase-legend span.legend-trial:last-child::before { background: #e7e5e4; border: 1px solid #4a5261; }
+[data-theme='dark'] .timeline-labels.phase-legend span.legend-plan:last-child::before { background: #3f8b5b; border: 0; }
+[data-theme='dark'] .timeline-labels.phase-legend span.legend-backup:last-child::before { background: #c79a1e; border: 0; }

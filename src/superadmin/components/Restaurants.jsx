@@ -19,6 +19,7 @@ import RestaurantQrManager from './RestaurantQrManager'
 import SubscriptionProgress from './SubscriptionProgress'
 import { STATUSES, dateTime, downloadCsv, money, plainNumber, shortDate } from '../lib/format'
 import { Card, EmptyState, Notice, SectionHead, Spinner, StatusBadge } from './ui'
+import BackupDaysEditor from './BackupDaysEditor'
 
 const PAGE_SIZE = 10
 const SORTS = {
@@ -656,6 +657,12 @@ export function RestaurantDetail({ navigate, id, profile }) {
         {tab === 'overview' && (
           <div className="grid gap-5">
           <RestaurantProfileCard restaurant={restaurant} profile={profile} onSaved={reload} />
+          <BackupDaysEditor
+            restaurantId={restaurant.id}
+            restaurantName={restaurant.name}
+            profile={profile}
+            onSaved={reload}
+          />
           <div className="grid gap-5 lg:grid-cols-3">
             {/* Only what the details form above does not already show: the
                 owner address lives on the Owner sign-in tab, and everything

@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase'
 
 import { menuImageBucket, restaurantSlug, scanLink } from '../lib/restaurant-config'
 import { CURRENCY, resolvePlanPrice } from '../../shared/plans.js'
+import { billingPhases } from '../../shared/periods.js'
 import { passwordError } from '../../shared/slug.js'
 import { resolveAccountDestination } from '../lib/account-role'
 import { SUPER_ADMIN_BASE } from '../lib/tenant'
@@ -225,16 +226,6 @@ const cardBrandName = (brand) => CARD_BRANDS[String(brand || '').toLowerCase()] 
 const walletName = (wallet) => ({ apple_pay: 'Apple Pay', google_pay: 'Google Pay', link: 'Link' }[String(wallet || '').toLowerCase()] || 'Digital wallet')
 const cardExpiry = (card) => card?.expMonth ? `${String(card.expMonth).padStart(2, '0')}/${String(card.expYear || '').slice(-2)}` : ''
 const daysUntil = (date) => date ? Math.max(0, Math.ceil((new Date(date).getTime() - Date.now()) / 86400000)) : null
-// How much of a period has gone by. `daysUntil` deliberately rounds up to whole
-// days, which is what a "31 days remaining" label wants and precisely what a
-// progress bar cannot use: on the first morning of a month it rounds to the full
-// period still to come and draws an empty bar. This is the same clock read as a
-// fraction, so the bar is honest about a period that has just begun.
-const fractionElapsed = (start, end) => {
-  const span = new Date(end).getTime() - new Date(start).getTime()
-  if (!(span > 0)) return 0
-  return Math.min(Math.max((Date.now() - new Date(start).getTime()) / span, 0), 1)
-}
 const relativeTime = (date) => { const minutes = Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 60000)); if (minutes < 1) return 'Just now'; if (minutes < 60) return `${minutes}m ago`; const hours = Math.floor(minutes / 60); if (hours < 24) return `${hours}h ago`; return `${Math.floor(hours / 24)}d ago` }
 
 function SubscriptionBanner({ subscription, openPage }) { const [dismissed, setDismissed] = useState(false); if (!subscription || dismissed) return null; const days = daysUntil(subscription.status === 'trialing' ? subscription.trial_end : subscription.current_period_end); const state = subscription.status === 'trialing' && days !== null && days <= 3 ? 'trial' : subscription.status === 'past_due' ? 'past-due' : subscription.status === 'suspended' || subscription.status === 'canceled' ? 'suspended' : null; if (!state) return null; const text = state === 'trial' ? `Your trial ends in ${days} day${days === 1 ? '' : 's'}. Subscribe now to continue.` : state === 'past-due' ? 'Payment failed. Update your payment method to avoid interruption.' : 'Your subscription requires renewal. Your menu is currently offline.'; return <aside className={`subscription-banner ${state}`}><span>{state === 'trial' ? <Info size={14} strokeWidth={2.2} aria-hidden="true" /> : <TriangleAlert size={14} strokeWidth={2.2} aria-hidden="true" />}</span><p>{text}</p><button onClick={() => openPage('subscription')}>{state === 'trial' ? 'Subscribe' : 'Renew now'}</button><button className="banner-close" aria-label="Dismiss subscription notice" onClick={() => setDismissed(true)}><X size={15} strokeWidth={2} aria-hidden="true" /></button></aside> }
@@ -575,84 +566,80 @@ function CoveragePeriodFact({ subscription }) {
 
 // The shape of the billing, drawn.
 //
-// Two dates in a grid answer "when" exactly, but not legibly. "PERIOD ENDS Nov 1,
-// 2026 — 31 days remaining" makes the owner do the arithmetic against today to
-// work out whether they are near the beginning or the end of what they paid for,
-// and what happens at the edge. This draws those same facts as a bar — how much of
-// the period is spent, where today sits in it, and what comes at the boundary — so
-// the answer is a glance rather than a subtraction.
+// Two dates in a grid answer "when" exactly, but not legibly. This draws the
+// whole life as one bar with the three phases every subscription moves through —
+// free trial (white), paid period (green), and the backup days that keep the
+// menu online when a period ends unpaid (yellow). A phase behind is solid, the
+// live one is filled up to today, and the ones ahead are hatched, so "where am I
+// and what comes next" is a glance rather than a subtraction.
 //
-// It draws from the same Safepay-written dates every other part of this screen
-// uses, and it draws nothing at all when there are none. A subscription with no
-// period has no timeline, and inventing one would be the most convincing kind of
-// wrong: a graph reads as measured truth.
-function BillingTimeline({ subscription }) {
-  const trialing = subscription.status === 'trialing'
-  const started = trialing ? subscription.trial_start : subscription.current_period_start
-  const ends = trialing ? subscription.trial_end : subscription.current_period_end
-  if (!started || !ends) return null
-  const span = Math.max(new Date(ends).getTime() - new Date(started).getTime(), 1)
-  const days = Math.max(1, Math.round(span / 86400000))
-  const left = daysUntil(ends)
-  const spent = Math.round(fractionElapsed(started, ends) * 100)
-  // How long the *next* period will be, taken from the plan rather than assumed to
-  // equal this one. A 7-day trial followed by a monthly plan is not two periods of
-  // the same size, and drawing them as equal halves would make the trial look
-  // twice as long as it is. Used for the widths of the bar and where the boundary
-  // sits, which is the only thing here that needs a length rather than a date.
-  const interval = subscription.plan?.interval
-  const perInterval = Number(subscription.plan?.interval_count) || 1
-  const nextDays = Math.max(
-    interval === 'year' ? 365 * perInterval
-      : interval === 'month' ? 30 * perInterval
-        : interval === 'day' ? perInterval
-          : Number(subscription.plan?.duration_days) || days,
-    1,
-  )
-  const split = Math.round((days / (days + nextDays)) * 100)
-  const renewing = !subscription.cancel_at_period_end
+// The phases come from shared/periods.js — the same helper the operator panel
+// draws with — and nothing is invented: a subscription with no dates draws no
+// timeline at all, because a graph reads as measured truth.
+function BillingTimeline({ subscription, billing }) {
+  const view = billingPhases(subscription, {
+    fallbackBackupDays: Number(billing?.backup_window_days) || Number(billing?.grace_period_days) || 0,
+  })
+  const { phases, current } = view
+  if (!phases.length) return null
+
+  const PHASE_LABEL = { trial: 'Free trial', plan: 'Paid & covered', backup: 'Backup days' }
+  const first = phases[0]
+  const last = phases[phases.length - 1]
+  const span = Math.max(last.end - first.start, 1)
   const amount = formatMoney(subscription.amount)
-  // What the period is *called* depends on what happens at its edge, which is the
-  // whole point of drawing it: a period that renews and a period that ends look
-  // different the moment the owner looks at them.
-  const headline = trialing ? 'Free trial' : renewing ? 'Current period' : 'Final period'
-  const state = left === 0 ? 'Ends today' : `${left} day${left === 1 ? '' : 's'} left`
-  const nextLabel = trialing ? 'First paid month' : renewing ? 'Next period' : 'Stops here'
+  const renewing = !subscription.cancel_at_period_end
+  const left = current?.daysLeft ?? null
+  const trialing = current?.kind === 'trial'
+  const inBackup = current?.kind === 'backup'
+  const backupDays = view.backupDays
+  const backupWord = `${backupDays} backup day${backupDays === 1 ? '' : 's'}`
+
+  const headline = trialing ? 'Free trial' : inBackup ? 'Backup days' : current ? (renewing ? 'Current period' : 'Final period') : 'Coverage ended'
+  const state = left === null ? 'Not running' : left === 0 ? 'Ends today' : `${left} day${left === 1 ? '' : 's'} left`
+  const axisLabel = trialing ? 'First payment' : inBackup ? 'Menu goes offline' : current ? (renewing ? 'Next payment' : 'Coverage ends') : 'Coverage ended'
+  const split = current ? Math.round(((current.end - first.start) / span) * 100) : 100
+
   const note = trialing
-    ? `Your ${days}-day trial covers this period. Safepay takes the first payment of ${amount} on ${formatDate(ends)}${renewing ? '.' : ', unless you turn automatic renewal on.'}`
-    : renewing
-      ? `Your last payment of ${amount} covered ${days} days. The next one is taken on ${formatDate(ends)} and covers the period after that.`
-      : `Your last payment of ${amount} covered ${days} days. Automatic renewal is off, so nothing further is charged and the menu goes offline after ${formatDate(ends)}.`
+    ? `Your ${Math.round((first.end - first.start) / 86400000)}-day trial covers this period. Safepay takes the first payment of ${amount} on ${formatDate(current.end)}${renewing ? '' : ' — or leave renewal off and pay later'}${backupDays > 0 ? `, and ${backupWord} keep the menu online if a payment is missed` : ''}.`
+    : inBackup
+      ? `The paid period ended on ${formatDate(current.start)}. You are inside your backup window — it ends on ${formatDate(current.end)}. Renew before then to keep the menu online for your guests.`
+      : current
+        ? renewing
+          ? `Your last payment of ${amount} covered this period. The next one is taken on ${formatDate(current.end)}${backupDays > 0 ? `; if it is missed, ${backupWord} keep the menu online before it goes offline` : ''}.`
+          : `Your last payment of ${amount} covered this period. Automatic renewal is off, so nothing further is charged and the menu goes offline after ${formatDate(current.end)}${backupDays > 0 ? `, plus ${backupWord}` : ''}.`
+        : 'Every phase of this subscription has ended. Renew to restore the menu for your guests.'
+
   return <section className="billing-timeline">
     <header className="timeline-head">
       <div><span>{headline}</span><strong>{state}</strong></div>
       <div className="timeline-amount"><small>{trialing ? 'first payment' : 'per period'}</small><strong>{amount}</strong></div>
     </header>
 
-    <div className="timeline-labels">
-      <span>{trialing ? 'Trial days' : 'Paid & covered'}</span>
-      <span>{nextLabel}</span>
+    <div className="timeline-labels phase-legend">
+      {phases.map((phase) => <span key={phase.kind} className={`legend-${phase.kind}`}>{PHASE_LABEL[phase.kind]}{phase.state === 'current' ? ' · now' : ''}</span>)}
     </div>
 
     <div className="timeline-track">
-      <div className="timeline-segment is-current" style={{ flexGrow: days }}>
-        {/* The fill ends exactly at today, so the boundary is the present moment. */}
-        <span className="timeline-fill" style={{ width: `${spent}%` }} />
-        <span className="timeline-today" style={{ left: `${spent}%` }} />
-      </div>
-      <div className={`timeline-segment ${renewing ? 'is-next' : 'is-off'}`} style={{ flexGrow: nextDays }} />
+      {phases.map((phase) => {
+        const ratio = phase.state === 'past' ? 1 : phase.state === 'current' ? (current?.ratio ?? 0) : 0
+        return <div key={phase.kind} className={`timeline-segment is-${phase.kind} is-${phase.state}`} style={{ flexGrow: Math.max(phase.days, 0.6) }}>
+          {/* The fill ends exactly at today, so the boundary is the present moment. */}
+          <span className="timeline-fill" style={{ width: `${Math.round(ratio * 100)}%` }} />
+        </div>
+      })}
     </div>
 
     <div className="timeline-axis" style={{ '--split': `${split}%` }}>
-      <span className="timeline-axis-start"><b>{formatDate(started)}</b><em>{trialing ? 'Trial started' : 'Period started'}</em></span>
-      <span className="timeline-axis-split"><b>{formatDate(ends)}</b><em>{renewing ? (trialing ? 'First payment' : 'Next payment') : 'Coverage ends'}</em></span>
+      <span className="timeline-axis-start"><b>{formatDate(first.start)}</b><em>{first.kind === 'trial' ? 'Trial started' : 'Period started'}</em></span>
+      <span className="timeline-axis-split"><b>{formatDate(current?.end ?? last.end)}</b><em>{axisLabel}</em></span>
     </div>
 
     <p className="timeline-note">{note}</p>
   </section>
 }
 
-function SubscriptionPage({ subscription, billing, openPage, refresh }) { if (!subscription) return <><Header kicker="BILLING" title="Subscription" /><div className="empty-collection"><span><CreditCard size={26} strokeWidth={1.6} aria-hidden="true" /></span><h2>Subscription details are not ready</h2><p>Your platform administrator has not assigned a subscription yet.</p></div></>; const status = subscription.status; const end = status === 'trialing' ? subscription.trial_end : subscription.current_period_end; const days = daysUntil(end); const title = status === 'trialing' ? 'Free trial active' : status === 'active' ? 'Subscription active' : status === 'past_due' ? 'Payment needs attention' : 'Subscription required'; const action = status === 'past_due' ? 'Renew subscription' : status === 'active' ? 'Manage payment method' : status === 'trialing' ? 'Subscribe securely' : 'Renew subscription'; return <><Header kicker="PLAN & BILLING" title="Subscription" /><section className={`subscription-card ${status}`}><div className="subscription-status"><span>{status === 'active' ? <CircleCheckBig size={21} strokeWidth={2} aria-hidden="true" /> : status === 'trialing' ? <Info size={21} strokeWidth={2} aria-hidden="true" /> : <TriangleAlert size={21} strokeWidth={2} aria-hidden="true" />}</span><div><small>{status.replace('_', ' ')}</small><h2>{title}</h2><p>{status === 'suspended' || status === 'canceled' ? 'Renew to restore access to your digital menu.' : `Your ${subscription.plan?.name || 'current'} plan is managed securely by Plato Table.`}</p></div></div><div className="subscription-facts"><div><span>Plan</span><strong>{subscription.plan?.name || 'Current plan'}</strong></div><div><span>Price</span><strong>{formatMoney(subscription.amount)} / period</strong></div><CoverageEndFact status={status} billing={billing} end={end} days={days} /><CoveragePeriodFact subscription={subscription} />{(subscription.status === 'trialing' || subscription.status === 'past_due') && billing?.access_ends_at && <div><span>Access ends</span><strong>{formatDate(billing.access_ends_at)}</strong><small>{billing.grace_days_remaining === null ? '' : `${billing.grace_days_remaining} day${billing.grace_days_remaining === 1 ? '' : 's'} of grace left`}</small></div>}</div><BillingTimeline subscription={subscription} /><AutoRenewToggle subscription={subscription} refresh={refresh} /><BillingActions subscription={subscription} primaryLabel={action} refresh={refresh} /><footer><button className="admin-secondary" onClick={() => openPage('billing')}>View billing history</button></footer></section></> }
+function SubscriptionPage({ subscription, billing, openPage, refresh }) { if (!subscription) return <><Header kicker="BILLING" title="Subscription" /><div className="empty-collection"><span><CreditCard size={26} strokeWidth={1.6} aria-hidden="true" /></span><h2>Subscription details are not ready</h2><p>Your platform administrator has not assigned a subscription yet.</p></div></>; const status = subscription.status; const end = status === 'trialing' ? subscription.trial_end : subscription.current_period_end; const days = daysUntil(end); const title = status === 'trialing' ? 'Free trial active' : status === 'active' ? 'Subscription active' : status === 'past_due' ? 'Payment needs attention' : 'Subscription required'; const action = status === 'past_due' ? 'Renew subscription' : status === 'active' ? 'Manage payment method' : status === 'trialing' ? 'Subscribe securely' : 'Renew subscription'; return <><Header kicker="PLAN & BILLING" title="Subscription" /><section className={`subscription-card ${status}`}><div className="subscription-status"><span>{status === 'active' ? <CircleCheckBig size={21} strokeWidth={2} aria-hidden="true" /> : status === 'trialing' ? <Info size={21} strokeWidth={2} aria-hidden="true" /> : <TriangleAlert size={21} strokeWidth={2} aria-hidden="true" />}</span><div><small>{status.replace('_', ' ')}</small><h2>{title}</h2><p>{status === 'suspended' || status === 'canceled' ? 'Renew to restore access to your digital menu.' : `Your ${subscription.plan?.name || 'current'} plan is managed securely by Plato Table.`}</p></div></div><div className="subscription-facts"><div><span>Plan</span><strong>{subscription.plan?.name || 'Current plan'}</strong></div><div><span>Price</span><strong>{formatMoney(subscription.amount)} / period</strong></div><CoverageEndFact status={status} billing={billing} end={end} days={days} /><CoveragePeriodFact subscription={subscription} />{(subscription.status === 'trialing' || subscription.status === 'past_due') && billing?.access_ends_at && <div><span>Access ends</span><strong>{formatDate(billing.access_ends_at)}</strong><small>{billing.grace_days_remaining === null ? '' : `${billing.grace_days_remaining} day${billing.grace_days_remaining === 1 ? '' : 's'} of grace left`}</small></div>}</div><BillingTimeline subscription={subscription} billing={billing} /><AutoRenewToggle subscription={subscription} refresh={refresh} /><BillingActions subscription={subscription} primaryLabel={action} refresh={refresh} /><footer><button className="admin-secondary" onClick={() => openPage('billing')}>View billing history</button></footer></section></> }
 
 function BillingHistory({ restaurantId, openPage }) { const { data, loading, error } = useData('payment_transactions', restaurantId, 'created_at'); if (loading) return <PageLoader label="Loading billing history" />; const paid = data.filter((item) => item.status === 'succeeded').reduce((total, item) => total + Number(item.amount || 0), 0); const exportCsv = () => { const rows = [['Date', 'Amount', 'Currency', 'Status'], ...data.map((item) => [new Date(item.created_at).toISOString(), item.amount, item.currency, item.status])]; const blob = new Blob([rows.map((row) => row.join(',')).join('\n')], { type: 'text/csv' }); const href = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = href; anchor.download = 'billing-history.csv'; anchor.click(); URL.revokeObjectURL(href) }; return <><Header kicker="PLAN & BILLING" title="Billing history" action="Export CSV" onAction={exportCsv} actionIcon={Download} />{error && <div className="login-error">{error}</div>}<section className="billing-summary"><span>Total paid</span><strong>{formatMoney(paid)}</strong><button className="admin-secondary" onClick={() => openPage('subscription')}>Back to subscription</button></section><div className="billing-table">{data.length ? data.map((item) => <article key={item.id}><time>{formatDate(item.created_at)}</time><strong>{formatMoney(item.amount)}</strong><span className={`transaction-status ${item.status}`}>{item.status}</span>{item.invoice_url ? <a href={item.invoice_url} target="_blank" rel="noreferrer">Invoice <ExternalLink size={12} strokeWidth={2.2} aria-hidden="true" /></a> : <span className="no-invoice">Invoice unavailable</span>}</article>) : <div className="empty-collection"><span><FileText size={26} strokeWidth={1.6} aria-hidden="true" /></span><h2>No transactions yet</h2><p>Completed payments will appear here.</p></div>}</div></> }
 

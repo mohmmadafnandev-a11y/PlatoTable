@@ -112,6 +112,11 @@ export default async function handler(request, response) {
     // `let`, because a bespoke plan carries its own trial length and overrides
     // the form's toggle once it exists (see the custom-plan block below).
     let trialDays = body.trialDays === undefined ? 7 : Number(body.trialDays)
+    // Free days after the trial or the paid period ends, before the sweep
+    // suspends the restaurant. Chosen here, editable from the panels later.
+    const backupDays = body.backupDays === undefined || body.backupDays === null || body.backupDays === ''
+      ? 0
+      : Number(body.backupDays)
     const customDomain = optionalText(body.customDomain)?.toLowerCase()
 
     if (!name || !ownerName || !ownerEmail || !emailPattern.test(ownerEmail)) {
@@ -132,6 +137,10 @@ export default async function handler(request, response) {
 
     if (!Number.isInteger(trialDays) || trialDays < 0 || trialDays > 365) {
       return response.status(400).json({ error: 'Trial days must be a whole number between 0 and 365' })
+    }
+
+    if (!Number.isInteger(backupDays) || backupDays < 0 || backupDays > 365) {
+      return response.status(400).json({ error: 'Backup days must be a whole number between 0 and 365' })
     }
 
     if (requestedPlanId && !uuidPattern.test(requestedPlanId)) return response.status(400).json({ error: 'Plan is invalid' })
@@ -246,11 +255,21 @@ export default async function handler(request, response) {
     }
 
     // `trial_used_at` records that the free trial has been spent, so it can only
-    // ever be offered once per restaurant.
+    // ever be offered once per restaurant. The backup window travels with it.
     const subscriptionUpdate = trialDays > 0
       ? { trial_used_at: new Date().toISOString() }
       : { status: 'suspended', trial_used_at: new Date().toISOString() }
-    const { error: subscriptionError } = await admin.from('subscriptions').update(subscriptionUpdate).eq('id', record.out_subscription_id)
+    // The backup_days column arrives with migration 024; until it is applied the
+    // onboarding still succeeds and simply keeps the platform-wide grace, rather
+    // than failing an onboarding an owner has already been created for.
+    let { error: subscriptionError } = await admin
+      .from('subscriptions')
+      .update({ ...subscriptionUpdate, backup_days: backupDays })
+      .eq('id', record.out_subscription_id)
+    if (subscriptionError && /backup_days/.test(subscriptionError.message || '')) {
+      console.warn('[onboard] backup_days column is missing — run migration 024 to record backup windows')
+      ;({ error: subscriptionError } = await admin.from('subscriptions').update(subscriptionUpdate).eq('id', record.out_subscription_id))
+    }
     if (subscriptionError) throw subscriptionError
 
     // Returned once, for the hand-over panel. The password is not stored
